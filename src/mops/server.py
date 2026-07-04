@@ -1,0 +1,155 @@
+"""MOPS Server: TCP relay + mDNS broadcast."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import TYPE_CHECKING
+
+from loguru import logger
+from zeroconf import ServiceInfo, Zeroconf
+
+from .protocol import (
+    BUFFER_SIZE,
+    MOPS_SERVICE_TYPE,
+)
+from .tunnel import tunnel
+
+if TYPE_CHECKING:
+    from .stats import TrafficStats
+
+
+class MdnsBroadcaster:
+    """Manages mDNS service registration and unregistration."""
+
+    def __init__(self) -> None:
+        self._zc: Zeroconf | None = None
+        self._service_info: ServiceInfo | None = None
+
+    async def register(self, port: int, weight: int = 1, ttl: int = 60) -> None:
+        import socket
+
+        hostname = socket.gethostname()
+        service_name = f"mops-server-{hostname}.{MOPS_SERVICE_TYPE}"
+
+        # Resolve local IP addresses
+        addresses = []
+        try:
+            for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+                ip = info[4][0]
+                if not ip.startswith("127."):
+                    addresses.append(socket.inet_aton(ip))
+        except Exception:
+            pass
+        if not addresses:
+            # Fallback: connect to a public IP to find our local address
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("8.8.8.8", 80))
+                addresses.append(socket.inet_aton(s.getsockname()[0]))
+                s.close()
+            except Exception:
+                addresses.append(socket.inet_aton("127.0.0.1"))
+
+        self._zc = Zeroconf()
+
+        properties = {
+            b"weight": str(weight).encode(),
+            b"version": b"0.1.0",
+        }
+
+        self._service_info = ServiceInfo(
+            type_=MOPS_SERVICE_TYPE,
+            name=service_name,
+            port=port,
+            properties=properties,
+            addresses=addresses,
+            host_ttl=ttl,
+        )
+        await self._zc.async_register_service(self._service_info)
+        resolved_ip = socket.inet_ntoa(addresses[0])
+        logger.info(f"mDNS service registered: {service_name} -> {resolved_ip}:{port} (TTL={ttl}s)")
+
+    async def unregister(self) -> None:
+        if self._zc and self._service_info:
+            await self._zc.async_unregister_service(self._service_info)
+            self._zc.close()
+            self._service_info = None
+            self._zc = None
+            logger.info("mDNS service unregistered")
+
+
+class MopsServer:
+    """TCP relay server that forwards traffic through tunnels."""
+
+    def __init__(
+        self,
+        port: int,
+        weight: int = 1,
+        mdns_ttl: int = 60,
+        stats: TrafficStats | None = None,
+    ) -> None:
+        self.port = port
+        self.weight = weight
+        self.mdns_ttl = mdns_ttl
+        self._broadcaster = MdnsBroadcaster()
+        self._server: asyncio.Server | None = None
+        self._stats = stats
+
+    async def handle_client(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        peer = writer.get_extra_info("peername")
+        logger.debug(f"New connection from {peer}")
+
+        connected = False
+        try:
+            header = await reader.readline()
+            if not header:
+                return
+
+            target = header.decode().strip()
+            if ":" not in target:
+                logger.warning(f"Invalid target header: {target!r}")
+                return
+
+            host, port_str = target.rsplit(":", 1)
+            port = int(port_str)
+
+            logger.debug(f"Connecting to {host}:{port}")
+            target_reader, target_writer = await asyncio.open_connection(host, port)
+            connected = True
+
+            node_name = f"{host}:{port}"
+            await tunnel(
+                reader, writer, target_reader, target_writer,
+                stats=self._stats, node_name=node_name,
+            )
+        except (ConnectionError, OSError) as e:
+            logger.debug(f"Connection error: {e}")
+        except asyncio.IncompleteReadError:
+            pass
+        except Exception as e:
+            logger.error(f"Unexpected error in handle_client: {e}")
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def run(self) -> None:
+        """Start the server and mDNS broadcast."""
+        self._server = await asyncio.start_server(
+            self.handle_client, "0.0.0.0", self.port
+        )
+        logger.info(f"Server listening on 0.0.0.0:{self.port}")
+
+        await self._broadcaster.register(self.port, self.weight, self.mdns_ttl)
+
+        async with self._server:
+            await self._server.serve_forever()
+
+    async def stop(self) -> None:
+        """Stop the server and unregister mDNS."""
+        await self._broadcaster.unregister()
+        if self._server:
+            self._server.close()
+            await self._server.wait_closed()
+            logger.info("Server stopped")
