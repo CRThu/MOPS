@@ -12,6 +12,7 @@
 - **健康检查** — mDNS TTL 60s + 被动熔断（连续失败自动隔离，30s 后恢复）
 - **系统代理** — 一键设置/取消系统全局代理（Windows / macOS / Linux）
 - **REST API** — 实时查看节点状态、流量统计
+- **Web Dashboard** — 浏览器可视化界面，深色科技感风格，含 SVG 网络拓扑动画
 
 ## 快速开始
 
@@ -123,17 +124,23 @@ prepend:
 
 > **说明**: `prepend` 会在订阅节点前插入 MOPS 节点，通过链式代理让流量先走 MOPS，再走原有代理节点。
 
-### 查看状态
+### Web Dashboard
 
-```bash
-curl http://127.0.0.1:10082/status
-```
+启动服务后，浏览器访问 `http://127.0.0.1:10082/` 查看可视化面板：
 
-## REST API
+- 深色科技感界面，实时显示节点状态和流量统计
+- SVG 网络拓扑动画图（数据流方向 + mDNS 发现）
+- 每 2 秒自动刷新
 
-```
-GET http://127.0.0.1:10082/status
-```
+### REST API
+
+API 在所有模式（server/client/both）下自动启动，端口为 `base_port + 2`（默认 10082）。
+
+| 端点 | 说明 |
+|------|------|
+| `GET /` | Web Dashboard 页面 |
+| `GET /api/server` | Server 端流量统计 JSON |
+| `GET /api/client` | Client 端流量统计 JSON |
 
 <details>
 <summary>响应示例</summary>
@@ -143,15 +150,9 @@ GET http://127.0.0.1:10082/status
   "mode": "both",
   "base_port": 10080,
   "strategy": "random",
-  "uptime": "3600s",
-  "server": {
-    "host": "0.0.0.0",
-    "port": 10080
-  },
-  "client": {
-    "listen": "127.0.0.1",
-    "port": 10081
-  },
+  "uptime": 3600,
+  "server": { "host": "0.0.0.0", "port": 10080 },
+  "client": { "listen": "127.0.0.1", "port": 10081 },
   "nodes": [
     {
       "ip": "192.168.1.100",
@@ -236,9 +237,10 @@ MOPS/
 │   ├── discovery.py      # mDNS 服务浏览
 │   ├── scheduler.py      # 负载均衡 + 熔断
 │   ├── api.py            # REST API
+│   ├── dashboard.html    # Dashboard 页面模板
 │   ├── service.py        # 系统服务管理
 │   └── proxy.py          # 系统代理配置
-├── tests/                # 175 个测试，88% 覆盖率
+├── tests/                # 184 个测试，88% 覆盖率
 ├── build.py              # Nuitka 打包脚本
 ├── pyproject.toml        # 项目配置 (hatchling)
 ├── .gitignore

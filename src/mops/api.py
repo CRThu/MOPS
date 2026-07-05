@@ -1,9 +1,9 @@
-"""RESTful API for MOPS status (aiohttp)."""
+"""RESTful API for MOPS status and Web Dashboard (aiohttp)."""
 
 from __future__ import annotations
 
-import asyncio
-import json
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aiohttp import web
@@ -12,15 +12,18 @@ from loguru import logger
 if TYPE_CHECKING:
     from .stats import TrafficStats
 
+_DASHBOARD_HTML_PATH = Path(__file__).parent / "dashboard.html"
+
 
 class MopsApi:
-    """HTTP API server exposing GET /status."""
+    """HTTP API server with Dashboard and per-role status endpoints."""
 
     def __init__(
         self,
         port: int,
         host: str = "127.0.0.1",
-        stats: TrafficStats | None = None,
+        server_stats: TrafficStats | None = None,
+        client_stats: TrafficStats | None = None,
         mode: str = "both",
         strategy: str = "random",
         server_host: str = "0.0.0.0",
@@ -30,7 +33,8 @@ class MopsApi:
     ) -> None:
         self.port = port
         self.host = host
-        self._stats = stats
+        self._server_stats = server_stats
+        self._client_stats = client_stats
         self._mode = mode
         self._strategy = strategy
         self._server_host = server_host
@@ -38,45 +42,54 @@ class MopsApi:
         self._client_listen = client_listen
         self._client_port = client_port
         self._runner: web.AppRunner | None = None
+        self._start_time = time.monotonic()
 
-    async def _handle_status(self, request: web.Request) -> web.Response:
-        if not self._stats:
-            return web.json_response({"error": "Stats not available"}, status=503)
+    def _snapshot(self, stats: TrafficStats) -> dict:
+        nodes = []
+        for name, ns in stats.get_all_nodes().items():
+            nodes.append({
+                "ip": ns.ip,
+                "port": ns.port,
+                "fails": ns.fails,
+                "up": ns.up,
+                "down": ns.down,
+            })
+        return {
+            "nodes": nodes,
+            "total_up": stats.get_total_up(),
+            "total_down": stats.get_total_down(),
+            "active_conns": stats.active_conns,
+            "uptime": time.monotonic() - self._start_time,
+        }
 
-        snapshot = self._stats.get_snapshot(
+    async def _handle_server_status(self, request: web.Request) -> web.Response:
+        if not self._server_stats:
+            return web.json_response({"error": "Server stats not available"}, status=503)
+        return web.json_response(self._snapshot(self._server_stats))
+
+    async def _handle_client_status(self, request: web.Request) -> web.Response:
+        if not self._client_stats:
+            return web.json_response({"error": "Client stats not available"}, status=503)
+        return web.json_response(self._snapshot(self._client_stats))
+
+    async def _handle_dashboard(self, request: web.Request) -> web.Response:
+        html = _build_dashboard(
             mode=self._mode,
             strategy=self._strategy,
             server_host=self._server_host,
             server_port=self._server_port,
             client_listen=self._client_listen,
             client_port=self._client_port,
-            api_port=self.port,
+            show_server=bool(self._server_stats),
+            show_client=bool(self._client_stats),
         )
-
-        data = {
-            "mode": snapshot.mode,
-            "base_port": snapshot.server_port,
-            "strategy": snapshot.strategy,
-            "uptime": f"{snapshot.uptime:.0f}s",
-            "server": {
-                "host": snapshot.server_host,
-                "port": snapshot.server_port,
-            },
-            "client": {
-                "listen": snapshot.client_listen,
-                "port": snapshot.client_port,
-            },
-            "nodes": snapshot.nodes,
-            "total_up": snapshot.total_up,
-            "total_down": snapshot.total_down,
-            "active_conns": snapshot.active_conns,
-        }
-
-        return web.json_response(data)
+        return web.Response(text=html, content_type="text/html")
 
     async def run(self) -> None:
         app = web.Application()
-        app.router.add_get("/status", self._handle_status)
+        app.router.add_get("/", self._handle_dashboard)
+        app.router.add_get("/api/server", self._handle_server_status)
+        app.router.add_get("/api/client", self._handle_client_status)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -88,3 +101,25 @@ class MopsApi:
         if self._runner:
             await self._runner.cleanup()
             logger.info("API server stopped")
+
+
+def _build_dashboard(
+    *,
+    mode: str,
+    strategy: str,
+    server_host: str,
+    server_port: int,
+    client_listen: str,
+    client_port: int,
+    show_server: bool,
+    show_client: bool,
+) -> str:
+    html = _DASHBOARD_HTML_PATH.read_text(encoding="utf-8")
+    return html.replace("{MODE}", mode) \
+        .replace("{STRATEGY}", strategy) \
+        .replace("{SERVER_HOST}", server_host) \
+        .replace("{SERVER_PORT}", str(server_port)) \
+        .replace("{CLIENT_LISTEN}", client_listen) \
+        .replace("{CLIENT_PORT}", str(client_port)) \
+        .replace("{SHOW_SERVER}", "true" if show_server else "false") \
+        .replace("{SHOW_CLIENT}", "true" if show_client else "false")

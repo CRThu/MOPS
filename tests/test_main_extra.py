@@ -3,10 +3,11 @@
 import json
 from argparse import Namespace
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from mops.__main__ import (
-    _run_async,
     _run_both,
     _run_client,
     _run_server,
@@ -34,40 +35,84 @@ class TestSetupLogger:
             assert "DEBUG" in levels
 
 
-class TestRunAsync:
-    @patch("mops.__main__.asyncio.run")
-    def test_run_async_calls_run_and_handles_stop(self, mock_run):
-        mock_run.side_effect = lambda coro: coro.close() or None
-        mock_obj = MagicMock()
-        _run_async(lambda: mock_obj)
-        mock_run.assert_called_once()
-
-
 class TestRunServer:
-    @patch("mops.__main__.asyncio.run")
-    def test_run_server_calls_asyncio_run(self, mock_run):
-        mock_run.side_effect = lambda coro: coro.close() or None
-        _run_server(base_port=10080, weight=1)
-        mock_run.assert_called_once()
+    @pytest.mark.asyncio
+    async def test_run_server_creates_api(self):
+        """Verify _run_server creates MopsApi with mode='server'."""
+        async def exec_coro(coro):
+            with patch("mops.server.MopsServer") as mock_server_cls, \
+                 patch("mops.api.MopsApi") as mock_api_cls:
+                mock_server = AsyncMock()
+                mock_server_cls.return_value = mock_server
+                mock_api = AsyncMock()
+                mock_api_cls.return_value = mock_api
+
+                try:
+                    await coro
+                except Exception:
+                    pass
+
+                mock_api_cls.assert_called_once()
+                call_kwargs = mock_api_cls.call_args[1]
+                assert call_kwargs["mode"] == "server"
+                assert call_kwargs["port"] == 10082
+                assert "server_stats" in call_kwargs
+
+        with patch("mops.__main__.asyncio.run", side_effect=exec_coro):
+            _run_server(base_port=10080, weight=1)
 
 
 class TestRunClient:
-    @patch("mops.__main__.asyncio.run")
-    def test_run_client_calls_asyncio_run(self, mock_run):
-        mock_run.side_effect = lambda coro: coro.close() or None
-        _run_client(base_port=10080, listen="127.0.0.1", strategy="random")
-        mock_run.assert_called_once()
+    @pytest.mark.asyncio
+    async def test_run_client_creates_api(self):
+        """Verify _run_client creates MopsApi with mode='client'."""
+        async def exec_coro(coro):
+            with patch("mops.client.MopsClient") as mock_client_cls, \
+                 patch("mops.api.MopsApi") as mock_api_cls:
+                mock_client = AsyncMock()
+                mock_client_cls.return_value = mock_client
+                mock_api = AsyncMock()
+                mock_api_cls.return_value = mock_api
+
+                try:
+                    await coro
+                except Exception:
+                    pass
+
+                mock_api_cls.assert_called_once()
+                call_kwargs = mock_api_cls.call_args[1]
+                assert call_kwargs["mode"] == "client"
+                assert call_kwargs["port"] == 10082
+                assert "client_stats" in call_kwargs
+
+        with patch("mops.__main__.asyncio.run", side_effect=exec_coro):
+            _run_client(base_port=10080, listen="127.0.0.1", strategy="random")
 
 
 class TestRunBoth:
-    @patch("mops.__main__.asyncio.run")
-    def test_run_both_creates_all(self, mock_run):
-        mock_run.side_effect = lambda coro: coro.close() or None
-        with patch("mops.server.MopsServer"), \
-             patch("mops.client.MopsClient"), \
-             patch("mops.api.MopsApi"):
+    @pytest.mark.asyncio
+    async def test_run_both_creates_api_with_both_stats(self):
+        """Verify _run_both creates MopsApi with both server_stats and client_stats."""
+        async def exec_coro(coro):
+            with patch("mops.server.MopsServer"), \
+                 patch("mops.client.MopsClient"), \
+                 patch("mops.api.MopsApi") as mock_api_cls:
+                mock_api = AsyncMock()
+                mock_api_cls.return_value = mock_api
+
+                try:
+                    await coro
+                except Exception:
+                    pass
+
+                mock_api_cls.assert_called_once()
+                call_kwargs = mock_api_cls.call_args[1]
+                assert call_kwargs["mode"] == "both"
+                assert "server_stats" in call_kwargs
+                assert "client_stats" in call_kwargs
+
+        with patch("mops.__main__.asyncio.run", side_effect=exec_coro):
             _run_both(base_port=10080, listen="127.0.0.1", strategy="random", weight=1)
-            mock_run.assert_called_once()
 
 
 class TestServiceLog:

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MOPS Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+<script>
+tailwind.config={darkMode:'class',theme:{extend:{colors:{bg:'#0a0e1a',card:'#111827',border:'#1e293b'}}}}
+</script>
+<style>
+@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.4}}
+.pulse{animation:pulse-dot 2s ease-in-out infinite}
+</style>
+</head>
+<body class="bg-bg text-slate-200 h-screen flex flex-col overflow-hidden font-sans">
+<header class="flex items-center gap-3 px-5 py-3 border-b border-border bg-card/80 backdrop-blur-sm">
+  <svg class="w-5 h-5 text-blue-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+  <span class="font-semibold text-sm bg-gradient-to-r from-blue-500 to-purple-500 bg-clip-text text-transparent">MOPS</span>
+  <div class="ml-auto flex items-center gap-4 text-xs text-slate-500">
+    <span id="hdr-mode">{MODE}</span><span>|</span>
+    <span id="hdr-strategy">{STRATEGY}</span><span>|</span>
+    <span id="hdr-uptime">--</span>
+    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 pulse"></span>
+  </div>
+</header>
+<div class="grid grid-cols-6 divide-x divide-border border-b border-border">
+  <div class="bg-card py-3 px-4 text-center"><div class="text-[10px] uppercase tracking-wider text-slate-500">Server Up</div><div class="text-lg font-bold text-emerald-500 font-mono" id="s-srv-up">0 B</div></div>
+  <div class="bg-card py-3 px-4 text-center"><div class="text-[10px] uppercase tracking-wider text-slate-500">Server Down</div><div class="text-lg font-bold text-blue-500 font-mono" id="s-srv-down">0 B</div></div>
+  <div class="bg-card py-3 px-4 text-center"><div class="text-[10px] uppercase tracking-wider text-slate-500">Client Up</div><div class="text-lg font-bold text-emerald-500 font-mono" id="s-cli-up">0 B</div></div>
+  <div class="bg-card py-3 px-4 text-center"><div class="text-[10px] uppercase tracking-wider text-slate-500">Client Down</div><div class="text-lg font-bold text-blue-500 font-mono" id="s-cli-down">0 B</div></div>
+  <div class="bg-card py-3 px-4 text-center"><div class="text-[10px] uppercase tracking-wider text-slate-500">Conns</div><div class="text-lg font-bold text-purple-500 font-mono" id="s-conns">0</div></div>
+  <div class="bg-card py-3 px-4 text-center"><div class="text-[10px] uppercase tracking-wider text-slate-500">Nodes</div><div class="text-lg font-bold text-amber-500 font-mono" id="s-nodes">0</div></div>
+</div>
+<div class="flex-1 flex overflow-hidden">
+  <div class="flex-1 bg-card flex flex-col">
+    <div class="px-4 py-2 border-b border-border"><span class="text-[10px] uppercase tracking-wider text-slate-500">Network Topology</span></div>
+    <div id="topology" class="flex-1"></div>
+  </div>
+  <div class="w-72 bg-card border-l border-border flex flex-col">
+    <div class="px-4 py-3 border-b border-border flex items-center justify-between">
+      <span class="text-[10px] uppercase tracking-wider text-slate-500">Discovered Nodes</span>
+      <span class="px-2 py-0.5 rounded-full bg-blue-500 text-white text-[10px]" id="node-count">0</span>
+    </div>
+    <div class="flex-1 overflow-y-auto p-2 space-y-1.5" id="nodes-list">
+      <div class="text-slate-500 text-xs text-center py-10 italic">Searching for nodes...</div>
+    </div>
+  </div>
+</div>
+<div class="h-40 grid grid-cols-2 divide-x divide-border border-t border-border">
+  <div class="bg-card p-3 overflow-auto">
+    <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-2">Server - Egress</div>
+    <div id="tbl-server"><div class="text-slate-500 text-xs italic text-center py-4">No traffic yet</div></div>
+  </div>
+  <div class="bg-card p-3 overflow-auto">
+    <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-2">Client - Ingress</div>
+    <div id="tbl-client"><div class="text-slate-500 text-xs italic text-center py-4">No traffic yet</div></div>
+  </div>
+</div>
+<script>
+var showS={SHOW_SERVER},showC={SHOW_CLIENT};
+var cy=cytoscape({container:document.getElementById('topology'),userZoomingEnabled:false,userPanningEnabled:false,style:[
+  {selector:'node',style:{'label':'data(label)','background-color':'data(bg)','border-color':'data(bd)','border-width':2,'color':'#fff','text-valign':'center','text-halign':'center','shape':'round-rectangle','padding':'14px','font-size':'13px','text-wrap':'wrap'}},
+  {selector:'edge',style:{'width':2,'line-color':'data(color)','line-style':'data(ls)','target-arrow-color':'data(color)','target-arrow-shape':'triangle','curve-style':'bezier','arrow-scale':0.8}}
+],layout:{name:'preset'},minZoom:0.3,maxZoom:3});
+
+function fmtB(b){if(!b)return'0 B';var u=['B','KB','MB','GB'],i=Math.floor(Math.log(b)/Math.log(1024));return(b/Math.pow(1024,i)).toFixed(1)+' '+u[i]}
+function fmtUp(s){var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return(d?d+'d ':'')+(h?h+'h ':'')+m+'m'}
+
+var lastKey='';
+function buildTopo(sData,cData){
+  var eles=[],nodes=[],edges=[];
+  var cx=300,cy2=200,gap=180;
+  var sx=cx+(showC?gap:0)+gap;
+  var srvs=(sData&&sData.nodes)?sData.nodes:[];
+  var syStep=srvs.length>1?90:0;
+  var syStart=cy2-(srvs.length-1)*syStep/2;
+
+  nodes.push({data:{id:'app',label:'App',bg:'#475569',bd:'#64748b'},position:{x:cx-gap*(showC?2:1),y:cy2}});
+  if(showC) nodes.push({data:{id:'cli',label:'Client\n:{CLIENT_PORT}',bg:'#1d4ed8',bd:'#3b82f6'},position:{x:cx,y:cy2}});
+
+  var sIds=[];
+  if(srvs.length){
+    srvs.forEach(function(n,i){
+      var id='srv'+i;sIds.push(id);
+      nodes.push({data:{id:id,label:'Server\n'+n.ip+':'+n.port,bg:'#15803d',bd:'#22c55e'},position:{x:sx,y:syStart+i*syStep}});
+    });
+  }else if(showS){
+    sIds.push('srv0');
+    nodes.push({data:{id:'srv0',label:'Server\n:{SERVER_PORT}',bg:'#15803d',bd:'#22c55e'},position:{x:sx,y:cy2}});
+  }
+
+  var ix=sx+gap;
+  nodes.push({data:{id:'inet',label:'Internet',bg:'#6d28d9',bd:'#8b5cf6'},position:{x:ix,y:cy2}});
+
+  if(showC) edges.push({data:{id:'e-ac',source:'app',target:'cli',color:'#22c55e',ls:'dashed'}});
+  if(showC&&sIds.length) sIds.forEach(function(s){edges.push({data:{id:'e-c-'+s,source:'cli',target:s,color:'#f59e0b',ls:'dashed'}})});
+  else if(!showC&&sIds.length) sIds.forEach(function(s){edges.push({data:{id:'e-a-'+s,source:'app',target:s,color:'#22c55e',ls:'dashed'}})});
+  sIds.forEach(function(s){edges.push({data:{id:'e-i-'+s,source:s,target:'inet',color:'#8b5cf6',ls:'dashed'}})});
+
+  var key=nodes.map(function(n){return n.data.id}).join()+'|'+edges.map(function(e){return e.data.source+e.data.target}).join();
+  if(key===lastKey)return;lastKey=key;
+
+  cy.elements().remove();
+  cy.add(eles.concat(nodes,edges));
+  cy.resize();
+  cy.fit(undefined,50);
+  cy.center();
+}
+
+function renderNodes(list,nodes){
+  if(!nodes||!nodes.length){list.innerHTML='<div class="text-slate-500 text-xs text-center py-10 italic">No nodes discovered yet</div>';return}
+  list.innerHTML=nodes.map(function(n){
+    var fc=n.fails>=3?'text-red-500':n.fails>=1?'text-amber-500':'text-slate-500';
+    return '<div class="bg-bg border border-border rounded-lg p-2.5 hover:border-blue-500 transition-colors">'
+      +'<div class="flex justify-between items-center mb-1"><span class="font-semibold text-sm">'+n.ip+'</span><span class="text-slate-500 text-xs font-mono">:'+n.port+'</span></div>'
+      +'<div class="grid grid-cols-2 gap-1 text-[11px]"><span class="text-slate-500">Up <span class="text-emerald-500">'+fmtB(n.up)+'</span></span><span class="text-slate-500">Down <span class="text-blue-500">'+fmtB(n.down)+'</span></span></div>'
+      +(n.fails?'<div class="'+fc+' text-[10px] mt-1">fails: '+n.fails+'</div>':'')+'</div>';
+  }).join('');
+}
+
+function renderTraffic(id,nodes,totalUp,totalDown){
+  var el=document.getElementById(id);
+  if(!nodes||!nodes.length){el.innerHTML='<div class="text-slate-500 text-xs italic text-center py-4">No traffic yet</div>';return}
+  el.innerHTML='<table class="w-full text-xs"><thead><tr class="text-slate-500"><th class="text-left py-1 font-medium">IP</th><th class="text-right py-1 font-medium">Up</th><th class="text-right py-1 font-medium">Down</th></tr></thead><tbody>'
+    +nodes.map(function(n){return'<tr class="border-t border-border/50"><td class="py-1">'+n.ip+'</td><td class="text-right text-emerald-500 py-1">'+fmtB(n.up)+'</td><td class="text-right text-blue-500 py-1">'+fmtB(n.down)+'</td></tr>'}).join('')
+    +'</tbody></table><div class="text-[10px] text-slate-500 text-right mt-1">Total Up'+fmtB(totalUp)+' Down'+fmtB(totalDown)+'</div>';
+}
+
+async function refresh(){
+  try{
+    var sData=null,cData=null;
+    if(showS){var r=await fetch('/api/server');if(r.ok)sData=await r.json()}
+    if(showC){var r2=await fetch('/api/client');if(r2.ok)cData=await r2.json()}
+    var srv=sData||cData;
+    if(srv){
+      document.getElementById('hdr-uptime').textContent=fmtUp(srv.uptime);
+      document.getElementById('s-conns').textContent=srv.active_conns;
+      if(sData){document.getElementById('s-srv-up').textContent=fmtB(sData.total_up);document.getElementById('s-srv-down').textContent=fmtB(sData.total_down);renderTraffic('tbl-server',sData.nodes,sData.total_up,sData.total_down)}
+      if(cData){document.getElementById('s-cli-up').textContent=fmtB(cData.total_up);document.getElementById('s-cli-down').textContent=fmtB(cData.total_down);renderTraffic('tbl-client',cData.nodes,cData.total_up,cData.total_down)}
+      var all=(sData?sData.nodes:[]).concat(cData?cData.nodes:[]);
+      document.getElementById('s-nodes').textContent=all.length;
+      document.getElementById('node-count').textContent=all.length;
+      renderNodes(document.getElementById('nodes-list'),all);
+      buildTopo(sData,cData);
+    }
+  }catch(e){}
+}
+refresh();setInterval(refresh,2000);
+window.addEventListener('resize',function(){cy.resize();cy.fit(undefined,40)});
+</script>
+</body>
+</html>
