@@ -1,6 +1,7 @@
 """Tests for proxy.py (system proxy configuration)."""
 
 import os
+import sys
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -64,6 +65,7 @@ class TestWindowsProxy:
         assert result["enabled"] is False
         assert result["server"] == ""
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="winreg only on Windows")
     @patch("mops.proxy.winreg")
     def test_win_reg_set_dword(self, mock_winreg):
         mock_key = MagicMock()
@@ -73,6 +75,7 @@ class TestWindowsProxy:
         _win_reg_set("ProxyEnable", 1)
         mock_winreg.SetValueEx.assert_called_once()
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="winreg only on Windows")
     @patch("mops.proxy.winreg")
     def test_win_reg_get_found(self, mock_winreg):
         mock_key = MagicMock()
@@ -82,6 +85,7 @@ class TestWindowsProxy:
         result = _win_reg_get("ProxyServer")
         assert result == "127.0.0.1:10081"
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="winreg only on Windows")
     @patch("mops.proxy.winreg")
     def test_win_reg_get_not_found(self, mock_winreg):
         mock_winreg.OpenKey.side_effect = FileNotFoundError
