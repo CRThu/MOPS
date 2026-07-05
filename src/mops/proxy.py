@@ -6,7 +6,10 @@ import ctypes
 import os
 import platform
 import subprocess
-import winreg
+
+if platform.system() == "Windows":
+    import winreg
+
 from loguru import logger
 
 
