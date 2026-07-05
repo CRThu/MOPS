@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MOPS Dashboard</title>
+<link rel="stylesheet" href="./src/style.css">
+</head>
+<body>
+<header>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+  <span class="brand">MOPS</span>
+  <div class="meta">
+    <span id="hdr-mode"></span><span class="sep">|</span>
+    <span id="hdr-strategy"></span><span class="sep">|</span>
+    <span id="hdr-uptime">--</span>
+    <span class="dot"></span>
+  </div>
+</header>
+
+<div class="stats-bar">
+  <div class="stat"><div class="stat-label">Server Up</div><div class="stat-value text-green" id="s-up">0 B</div></div>
+  <div class="stat"><div class="stat-label">Server Down</div><div class="stat-value text-blue" id="s-down">0 B</div></div>
+  <div class="stat"><div class="stat-label">Active</div><div class="stat-value text-purple" id="s-active">0</div></div>
+  <div class="stat"><div class="stat-label">Total Conns</div><div class="stat-value text-amber" id="s-total">0</div></div>
+  <div class="stat"><div class="stat-label">Uptime</div><div class="stat-value text-slate" id="s-uptime">0m</div></div>
+</div>
+
+<div class="main-area">
+  <div class="topology-panel">
+    <div class="panel-header">Network Topology</div>
+    <div id="topo-container"></div>
+  </div>
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <span>Connections</span>
+      <span class="badge" id="conn-count">0</span>
+    </div>
+    <div id="conn-list" class="conn-list">
+      <div class="empty-hint">Waiting for connections…</div>
+    </div>
+  </div>
+</div>
+
+<div class="bottom-bar">
+  <div class="traffic-panel">
+    <div class="panel-header">Server Traffic</div>
+    <div id="traffic-table" class="traffic-table">
+      <div class="empty-hint">No traffic yet</div>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="./src/main.ts"></script>
+</body>
+</html>

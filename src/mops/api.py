@@ -10,13 +10,14 @@ from aiohttp import web
 from loguru import logger
 
 if TYPE_CHECKING:
-    from .stats import TrafficStats
+    from .stats import ConnectionTracker, TrafficStats
 
+_STATIC_DIR = Path(__file__).parent / "static"
 _DASHBOARD_HTML_PATH = Path(__file__).parent / "dashboard.html"
 
 
 class MopsApi:
-    """HTTP API server with Dashboard and per-role status endpoints."""
+    """HTTP API server with Dashboard and status endpoints."""
 
     def __init__(
         self,
@@ -30,6 +31,7 @@ class MopsApi:
         server_port: int = 10080,
         client_listen: str = "127.0.0.1",
         client_port: int = 10081,
+        conn_tracker: ConnectionTracker | None = None,
     ) -> None:
         self.port = port
         self.host = host
@@ -41,6 +43,7 @@ class MopsApi:
         self._server_port = server_port
         self._client_listen = client_listen
         self._client_port = client_port
+        self._conn_tracker = conn_tracker
         self._runner: web.AppRunner | None = None
         self._start_time = time.monotonic()
 
@@ -65,14 +68,20 @@ class MopsApi:
     async def _handle_server_status(self, request: web.Request) -> web.Response:
         if not self._server_stats:
             return web.json_response({"error": "Server stats not available"}, status=503)
-        return web.json_response(self._snapshot(self._server_stats))
-
-    async def _handle_client_status(self, request: web.Request) -> web.Response:
-        if not self._client_stats:
-            return web.json_response({"error": "Client stats not available"}, status=503)
-        return web.json_response(self._snapshot(self._client_stats))
+        result = self._snapshot(self._server_stats)
+        if self._conn_tracker:
+            result["connections"] = self._conn_tracker.get_connections()
+            result["active_conns"] = self._conn_tracker.active_count()
+        else:
+            result["connections"] = []
+        return web.json_response(result)
 
     async def _handle_dashboard(self, request: web.Request) -> web.Response:
+        # Serve built index.html from static/
+        index = _STATIC_DIR / "index.html"
+        if index.exists():
+            return web.FileResponse(index)
+        # Fallback to legacy dashboard.html
         html = _build_dashboard(
             mode=self._mode,
             strategy=self._strategy,
@@ -89,7 +98,14 @@ class MopsApi:
         app = web.Application()
         app.router.add_get("/", self._handle_dashboard)
         app.router.add_get("/api/server", self._handle_server_status)
-        app.router.add_get("/api/client", self._handle_client_status)
+
+        # Serve built frontend assets at root (dashboard.js, dashboard.css)
+        if _STATIC_DIR.is_dir():
+            app.router.add_static("/static", _STATIC_DIR)
+            # Also serve individual assets at root for absolute paths in HTML
+            for f in _STATIC_DIR.iterdir():
+                if f.suffix in (".js", ".css"):
+                    app.router.add_get(f"/{f.name}", lambda req, fp=f: web.FileResponse(fp))
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()

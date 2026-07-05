@@ -15,7 +15,7 @@ from .protocol import (
 from .tunnel import tunnel
 
 if TYPE_CHECKING:
-    from .stats import TrafficStats
+    from .stats import ConnectionTracker, TrafficStats
 
 
 class MdnsBroadcaster:
@@ -104,6 +104,7 @@ class MopsServer:
         mdns_ttl: int = 60,
         bind: str = "",
         stats: TrafficStats | None = None,
+        conn_tracker: ConnectionTracker | None = None,
     ) -> None:
         self.port = port
         self.weight = weight
@@ -112,14 +113,16 @@ class MopsServer:
         self._broadcaster = MdnsBroadcaster()
         self._server: asyncio.Server | None = None
         self._stats = stats
+        self._conn_tracker = conn_tracker
 
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         peer = writer.get_extra_info("peername")
+        peer_ip = peer[0] if peer else "unknown"
         logger.debug(f"New connection from {peer}")
 
-        connected = False
+        conn_id: str | None = None
         try:
             header = await reader.readline()
             if not header:
@@ -133,9 +136,11 @@ class MopsServer:
             host, port_str = target.rsplit(":", 1)
             port = int(port_str)
 
+            if self._conn_tracker:
+                conn_id = self._conn_tracker.start(peer_ip, host, port)
+
             logger.debug(f"Connecting to {host}:{port}")
             target_reader, target_writer = await asyncio.open_connection(host, port)
-            connected = True
 
             await tunnel(
                 reader, writer, target_reader, target_writer,
@@ -148,6 +153,8 @@ class MopsServer:
         except Exception as e:
             logger.error(f"Unexpected error in handle_client: {e}")
         finally:
+            if self._conn_tracker and conn_id:
+                self._conn_tracker.end(conn_id)
             writer.close()
             try:
                 await writer.wait_closed()

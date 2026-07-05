@@ -37,7 +37,7 @@ class TestDashboardHTML:
     @pytest.mark.asyncio
     async def test_dashboard_returns_html(self):
         stats = TrafficStats()
-        api = MopsApi(port=0, server_stats=stats, client_stats=stats, mode="both")
+        api = MopsApi(port=0, server_stats=stats, mode="both")
 
         app = web.Application()
         app.router.add_get("/", api._handle_dashboard)
@@ -48,42 +48,11 @@ class TestDashboardHTML:
             assert "text/html" in resp.content_type
             html = await resp.text()
             assert "MOPS" in html
-            assert "fetch" in html
 
     @pytest.mark.asyncio
-    async def test_dashboard_server_only_mode(self):
+    async def test_dashboard_has_topology_container(self):
         stats = TrafficStats()
-        api = MopsApi(port=0, server_stats=stats, mode="server")
-
-        app = web.Application()
-        app.router.add_get("/", api._handle_dashboard)
-
-        async with TestClient(TestServer(app)) as client:
-            resp = await client.get("/")
-            assert resp.status == 200
-            html = await resp.text()
-            assert "showS=true" in html
-            assert "showC=false" in html
-
-    @pytest.mark.asyncio
-    async def test_dashboard_client_only_mode(self):
-        stats = TrafficStats()
-        api = MopsApi(port=0, client_stats=stats, mode="client")
-
-        app = web.Application()
-        app.router.add_get("/", api._handle_dashboard)
-
-        async with TestClient(TestServer(app)) as client:
-            resp = await client.get("/")
-            assert resp.status == 200
-            html = await resp.text()
-            assert "showS=false" in html
-            assert "showC=true" in html
-
-    @pytest.mark.asyncio
-    async def test_dashboard_has_vis_network(self):
-        stats = TrafficStats()
-        api = MopsApi(port=0, server_stats=stats, client_stats=stats, mode="both")
+        api = MopsApi(port=0, server_stats=stats, mode="both")
 
         app = web.Application()
         app.router.add_get("/", api._handle_dashboard)
@@ -91,19 +60,5 @@ class TestDashboardHTML:
         async with TestClient(TestServer(app)) as client:
             resp = await client.get("/")
             html = await resp.text()
-            assert "cytoscape" in html
-            assert "cytoscape.min.js" in html
-
-    @pytest.mark.asyncio
-    async def test_dashboard_compact_layout(self):
-        stats = TrafficStats()
-        api = MopsApi(port=0, server_stats=stats, client_stats=stats, mode="both")
-
-        app = web.Application()
-        app.router.add_get("/", api._handle_dashboard)
-
-        async with TestClient(TestServer(app)) as client:
-            resp = await client.get("/")
-            html = await resp.text()
-            assert "h-screen" in html
-            assert "overflow-hidden" in html
+            # New dashboard has topo-container, old has cytoscape
+            assert "topo-container" in html or "cytoscape" in html

@@ -17,7 +17,7 @@ from .protocol import (
     STRATEGY_RANDOM,
 )
 from .proxy import proxy_off, proxy_on, proxy_status
-from .stats import TrafficStats
+from .stats import ConnectionTracker, TrafficStats
 
 
 def _setup_logger(service_mode: bool = False) -> None:
@@ -38,10 +38,11 @@ def _run_server(base_port: int, weight: int, bind: str = "") -> None:
 
     api_port = base_port + 2
     stats = TrafficStats()
+    conn_tracker = ConnectionTracker()
 
     async def _server():
-        server = MopsServer(port=base_port, weight=weight, bind=bind, stats=stats)
-        api = MopsApi(port=api_port, server_stats=stats, mode="server")
+        server = MopsServer(port=base_port, weight=weight, bind=bind, stats=stats, conn_tracker=conn_tracker)
+        api = MopsApi(port=api_port, server_stats=stats, mode="server", conn_tracker=conn_tracker)
 
         async def shutdown():
             await server.stop()
@@ -101,9 +102,10 @@ def _run_both(base_port: int, listen: str, strategy: str, weight: int, bind: str
     api_port = base_port + 2
     server_stats = TrafficStats()
     client_stats = TrafficStats()
+    conn_tracker = ConnectionTracker()
 
     async def _both():
-        server = MopsServer(port=base_port, weight=weight, bind=bind, stats=server_stats)
+        server = MopsServer(port=base_port, weight=weight, bind=bind, stats=server_stats, conn_tracker=conn_tracker)
         client = MopsClient(
             listen_port=client_port, listen_host=listen,
             strategy=strategy, stats=client_stats,
@@ -117,6 +119,7 @@ def _run_both(base_port: int, listen: str, strategy: str, weight: int, bind: str
             server_port=base_port,
             client_listen=listen,
             client_port=client_port,
+            conn_tracker=conn_tracker,
         )
 
         async def shutdown():

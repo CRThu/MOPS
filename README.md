@@ -10,15 +10,19 @@
 - **零配置发现** — 基于 mDNS，Server 广播、Client 自动发现，无需手动配置节点列表
 - **负载均衡** — `random`（随机）/ `hash`（会话保持）两种策略
 - **健康检查** — mDNS TTL 60s + 被动熔断（连续失败自动隔离，30s 后恢复）
+- **连接追踪** — Server 端记录所有 client 连接（IP、目标、状态），最近 5 分钟滚动历史
 - **系统代理** — 一键设置/取消系统全局代理（Windows / macOS / Linux）
-- **REST API** — 实时查看节点状态、流量统计
-- **Web Dashboard** — 浏览器可视化界面，深色科技感风格，含 SVG 网络拓扑动画
+- **REST API** — 实时查看节点状态、流量统计、连接信息
+- **Web Dashboard** — AntV G6 拓扑图 + 暗色科技感界面，15s 自动刷新
 
 ## 快速开始
 
 ```bash
-# 安装依赖
+# 安装 Python 依赖
 uv sync
+
+# 安装前端依赖（可选，仅开发 Dashboard 时需要）
+cd web && bun install && bun run build && cd ..
 
 # 出口机启动 Server（对外暴露出口）
 uv run python -m mops run server
@@ -128,31 +132,23 @@ prepend:
 
 启动服务后，浏览器访问 `http://127.0.0.1:10082/` 查看可视化面板：
 
-- 深色科技感界面，实时显示节点状态和流量统计
-- SVG 网络拓扑动画图（数据流方向 + mDNS 发现）
-- 每 2 秒自动刷新
+- AntV G6 5.x 拓扑图，dagre 从左到右布局（App → Client → Server → Internet）
+- 活跃连接橙色流动动画，15 秒自动刷新
+- 右侧 Connections 面板：实时显示所有连接状态
+- 底部 Server Traffic 表格：各节点上下行流量
 
 ### REST API
-
-API 在所有模式（server/client/both）下自动启动，端口为 `base_port + 2`（默认 10082）。
 
 | 端点 | 说明 |
 |------|------|
 | `GET /` | Web Dashboard 页面 |
-| `GET /api/server` | Server 端流量统计 JSON |
-| `GET /api/client` | Client 端流量统计 JSON |
+| `GET /api/server` | Server 状态 + 流量 + 连接信息 JSON |
 
 <details>
 <summary>响应示例</summary>
 
 ```json
 {
-  "mode": "both",
-  "base_port": 10080,
-  "strategy": "random",
-  "uptime": 3600,
-  "server": { "host": "0.0.0.0", "port": 10080 },
-  "client": { "listen": "127.0.0.1", "port": 10081 },
   "nodes": [
     {
       "ip": "192.168.1.100",
@@ -164,11 +160,33 @@ API 在所有模式（server/client/both）下自动启动，端口为 `base_por
   ],
   "total_up": 1024000,
   "total_down": 5120000,
-  "active_conns": 5
+  "active_conns": 3,
+  "connections": [
+    {
+      "conn_id": "1",
+      "client_ip": "192.168.1.50",
+      "target_host": "example.com",
+      "target_port": 443,
+      "status": "active",
+      "started_at": 12345.6
+    },
+    {
+      "conn_id": "2",
+      "client_ip": "192.168.1.50",
+      "target_host": "google.com",
+      "target_port": 443,
+      "status": "completed",
+      "started_at": 12300.0,
+      "ended_at": 12340.0
+    }
+  ],
+  "uptime": 3600
 }
 ```
 
 </details>
+
+> **注意**: `/api/client` 已移除。Client 端不再提供独立 API，所有信息通过 Server 的 `/api/server` 获取。
 
 ## 负载均衡
 
@@ -217,9 +235,16 @@ mops service log -s "error"     # 搜索关键词
 ## 开发
 
 ```bash
+# Python
 uv sync --extra dev
 uv run pytest tests/ -v --cov=mops
 uv run python build.py          # Nuitka 打包
+
+# 前端 Dashboard
+cd web
+bun install                     # 安装依赖（Bun）
+bun run dev                     # 开发模式（热更新）
+bun run build                   # 构建到 src/mops/static/
 ```
 
 ### 项目结构
@@ -230,17 +255,29 @@ MOPS/
 │   ├── __init__.py       # 版本号
 │   ├── __main__.py       # CLI 入口
 │   ├── protocol.py       # 共享常量 + 日志路径
-│   ├── stats.py          # 流量统计
+│   ├── stats.py          # 流量统计 + ConnectionTracker
 │   ├── tunnel.py         # 双向流量拷贝
-│   ├── server.py         # TCP 透传 + mDNS 广播
+│   ├── server.py         # TCP 透传 + mDNS + 连接追踪
 │   ├── client.py         # SOCKS5 + HTTP CONNECT + HTTP 代理
 │   ├── discovery.py      # mDNS 服务浏览
 │   ├── scheduler.py      # 负载均衡 + 熔断
-│   ├── api.py            # REST API
-│   ├── dashboard.html    # Dashboard 页面模板
+│   ├── api.py            # REST API + 静态文件服务
+│   ├── dashboard.html    # Legacy Dashboard 模板（备用）
+│   ├── static/           # Vite 构建输出（G6 Dashboard）
+│   │   ├── index.html
+│   │   ├── dashboard.js
+│   │   └── dashboard.css
 │   ├── service.py        # 系统服务管理
 │   └── proxy.py          # 系统代理配置
-├── tests/                # 184 个测试，88% 覆盖率
+├── web/                  # 前端源码（Bun + Vite + TS + G6）
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── index.html
+│   └── src/
+│       ├── main.ts       # 数据轮询 + 转换 + 渲染
+│       ├── graph.ts      # G6 拓扑图模块
+│       └── style.css     # 暗色主题样式
+├── tests/                # 181 个测试，88% 覆盖率
 ├── build.py              # Nuitka 打包脚本
 ├── pyproject.toml        # 项目配置 (hatchling)
 ├── .gitignore
