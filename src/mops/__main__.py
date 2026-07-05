@@ -51,11 +51,11 @@ def _run_async(coro_factory) -> None:
     asyncio.run(_wrapper())
 
 
-def _run_server(base_port: int, weight: int) -> None:
+def _run_server(base_port: int, weight: int, bind: str = "") -> None:
     from .server import MopsServer
 
     stats = TrafficStats()
-    _run_async(lambda: MopsServer(port=base_port, weight=weight, stats=stats))
+    _run_async(lambda: MopsServer(port=base_port, weight=weight, bind=bind, stats=stats))
 
 
 def _run_client(base_port: int, listen: str, strategy: str) -> None:
@@ -69,7 +69,7 @@ def _run_client(base_port: int, listen: str, strategy: str) -> None:
     ))
 
 
-def _run_both(base_port: int, listen: str, strategy: str, weight: int) -> None:
+def _run_both(base_port: int, listen: str, strategy: str, weight: int, bind: str = "") -> None:
     from .api import MopsApi
     from .client import MopsClient
     from .server import MopsServer
@@ -79,7 +79,7 @@ def _run_both(base_port: int, listen: str, strategy: str, weight: int) -> None:
     stats = TrafficStats()
 
     async def _both():
-        server = MopsServer(port=base_port, weight=weight, stats=stats)
+        server = MopsServer(port=base_port, weight=weight, bind=bind, stats=stats)
         client = MopsClient(
             listen_port=client_port, listen_host=listen,
             strategy=strategy, stats=stats,
@@ -112,19 +112,20 @@ def cmd_run(args: argparse.Namespace) -> None:
     _setup_logger(args.service)
     base_port = args.port or DEFAULT_BASE_PORT
     mode = args.mode
+    bind = getattr(args, "bind", "") or ""
 
     if mode == "server":
-        _run_server(base_port, args.weight)
+        _run_server(base_port, args.weight, bind)
     elif mode == "client":
         _run_client(base_port, args.listen, args.strategy)
     else:
-        _run_both(base_port, args.listen, args.strategy, args.weight)
+        _run_both(base_port, args.listen, args.strategy, args.weight, bind)
 
 
 def cmd_install(args: argparse.Namespace) -> None:
     _setup_logger()
     from .service import install
-    install(args.mode, args.port or DEFAULT_BASE_PORT, args.strategy)
+    install()
 
 
 def cmd_uninstall(args: argparse.Namespace) -> None:
@@ -136,7 +137,12 @@ def cmd_uninstall(args: argparse.Namespace) -> None:
 def cmd_start(args: argparse.Namespace) -> None:
     _setup_logger()
     from .service import start
-    start()
+    start(
+        mode=args.mode,
+        port=args.port or DEFAULT_BASE_PORT,
+        strategy=args.strategy,
+        bind=getattr(args, "bind", "") or "",
+    )
 
 
 def cmd_stop(args: argparse.Namespace) -> None:
@@ -205,28 +211,32 @@ def build_parser() -> argparse.ArgumentParser:
                         help=argparse.SUPPRESS)
     sp_run.add_argument("--weight", type=int, default=1,
                         help="Server weight (default: 1)")
+    sp_run.add_argument("--bind", default="",
+                        help="IP address to advertise via mDNS (auto-detect if omitted)")
     sp_run.set_defaults(func=cmd_run)
 
     # service - system service management
     sp_service = subparsers.add_parser("service", help="System service management")
     service_sub = sp_service.add_subparsers(dest="service_action", help="Service commands")
 
-    # service install
+    # service install (no runtime params)
     sp_svc_install = service_sub.add_parser("install", help="Install system service")
-    sp_svc_install.add_argument("--mode", choices=["server", "client", "both"],
-                                default="both", help="Service mode")
-    sp_svc_install.add_argument("--port", type=int, default=DEFAULT_BASE_PORT,
-                                help="Base port (default: 10080)")
-    sp_svc_install.add_argument("--strategy", choices=[STRATEGY_RANDOM, STRATEGY_HASH],
-                                default=STRATEGY_RANDOM, help="Load balance strategy")
     sp_svc_install.set_defaults(func=cmd_install)
 
     # service uninstall
     sp_svc_uninstall = service_sub.add_parser("uninstall", help="Uninstall system service")
     sp_svc_uninstall.set_defaults(func=cmd_uninstall)
 
-    # service start
+    # service start (runtime params)
     sp_svc_start = service_sub.add_parser("start", help="Start service")
+    sp_svc_start.add_argument("--mode", choices=["server", "client", "both"],
+                              default="both", help="Service mode (default: both)")
+    sp_svc_start.add_argument("--port", type=int, default=DEFAULT_BASE_PORT,
+                              help="Base port (default: 10080)")
+    sp_svc_start.add_argument("--strategy", choices=[STRATEGY_RANDOM, STRATEGY_HASH],
+                              default=STRATEGY_RANDOM, help="Load balance strategy")
+    sp_svc_start.add_argument("--bind", default="",
+                              help="IP address to advertise via mDNS (auto-detect if omitted)")
     sp_svc_start.set_defaults(func=cmd_start)
 
     # service stop
@@ -269,6 +279,15 @@ def main() -> None:
         args = parser.parse_args(["run", "both"])
         args.func(args)
         return
+
+    # When --service flag is set, read config from file
+    if getattr(args, "service", False):
+        from .service import _load_config
+        cfg = _load_config()
+        args.mode = cfg.get("mode", "both")
+        args.port = cfg.get("port", DEFAULT_BASE_PORT)
+        args.strategy = cfg.get("strategy", STRATEGY_RANDOM)
+        args.bind = cfg.get("bind", "")
 
     # Handle nested subcommands validation
     if args.command == "service" and not getattr(args, "service_action", None):

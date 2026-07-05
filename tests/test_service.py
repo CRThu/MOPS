@@ -8,6 +8,8 @@ import pytest
 from mops.service import (
     _get_exe_path,
     _run_cmd,
+    _save_config,
+    _load_config,
     install,
     uninstall,
     start,
@@ -20,9 +22,7 @@ class TestGetExePath:
     def test_frozen(self):
         with patch("sys.frozen", True, create=True), \
              patch("sys.executable", "/path/to/mops.exe"):
-            # Reset module to pick up the patched values
             result = _get_exe_path()
-            # When frozen, returns sys.executable
             assert result == "/path/to/mops.exe" or "python" in result
 
     def test_not_frozen(self):
@@ -63,6 +63,22 @@ class TestRunCmd:
             assert result.returncode == 1
 
 
+class TestConfig:
+    def test_save_and_load(self, tmp_path):
+        config_file = tmp_path / "config.json"
+        with patch("mops.service._CONFIG_FILE", config_file), \
+             patch("mops.service._CONFIG_DIR", tmp_path):
+            _save_config(mode="server", port=20080, strategy="hash")
+            cfg = _load_config()
+            assert cfg == {"mode": "server", "port": 20080, "strategy": "hash", "bind": ""}
+
+    def test_load_defaults(self, tmp_path):
+        config_file = tmp_path / "nonexistent.json"
+        with patch("mops.service._CONFIG_FILE", config_file):
+            cfg = _load_config()
+            assert cfg == {"mode": "both", "port": 10080, "strategy": "random", "bind": ""}
+
+
 class TestInstall:
     def test_install_linux(self):
         mock_result = MagicMock()
@@ -74,9 +90,8 @@ class TestInstall:
              patch("mops.service._SERVICE_DIR") as mock_dir, \
              patch("pathlib.Path.write_text") as mock_write, \
              patch("pathlib.Path.exists", return_value=False):
-            install("both", 10080, "random")
+            install()
 
-            # Should call daemon-reload and enable
             calls = mock_run.call_args_list
             assert any("daemon-reload" in str(c) for c in calls)
             assert any("enable" in str(c) for c in calls)
@@ -88,7 +103,7 @@ class TestInstall:
         with patch("sys.platform", "win32"), \
              patch("subprocess.run", return_value=mock_result) as mock_run, \
              patch("mops.service._get_exe_path", return_value="C:\\mops.exe"):
-            install("server", 20080, "hash")
+            install()
 
             calls = mock_run.call_args_list
             assert any("sc" in str(c) for c in calls)
@@ -126,10 +141,24 @@ class TestStartStop:
         mock_result.returncode = 0
 
         with patch("sys.platform", "linux"), \
+             patch("mops.service._save_config") as mock_save, \
              patch("subprocess.run", return_value=mock_result) as mock_run:
-            start()
+            start(mode="both", port=10080, strategy="random")
+            mock_save.assert_called_once_with(mode="both", port=10080, strategy="random", bind="")
             calls = mock_run.call_args_list
             assert any("start" in str(c) for c in calls)
+
+    def test_start_windows(self):
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+
+        with patch("sys.platform", "win32"), \
+             patch("mops.service._save_config") as mock_save, \
+             patch("subprocess.run", return_value=mock_result) as mock_run:
+            start(mode="server", port=20080, strategy="hash")
+            mock_save.assert_called_once_with(mode="server", port=20080, strategy="hash", bind="")
+            calls = mock_run.call_args_list
+            assert any("sc" in str(c) for c in calls)
 
     def test_stop_linux(self):
         mock_result = MagicMock()
@@ -140,16 +169,6 @@ class TestStartStop:
             stop()
             calls = mock_run.call_args_list
             assert any("stop" in str(c) for c in calls)
-
-    def test_start_windows(self):
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-
-        with patch("sys.platform", "win32"), \
-             patch("subprocess.run", return_value=mock_result) as mock_run:
-            start()
-            calls = mock_run.call_args_list
-            assert any("sc" in str(c) for c in calls)
 
 
 class TestStatus:

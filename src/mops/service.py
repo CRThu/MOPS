@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
-import os
+import json
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 from loguru import logger
+
+from .protocol import DEFAULT_BASE_PORT, STRATEGY_RANDOM
+
+
+# Config file stores runtime params (mode, port, strategy)
+_CONFIG_DIR = Path.home() / ".config" / "mops"
+_CONFIG_FILE = _CONFIG_DIR / "config.json"
 
 
 def _get_exe_path() -> str:
@@ -28,13 +35,32 @@ def _run_cmd(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
     return result
 
 
-def install(mode: str, base_port: int, strategy: str = "random") -> None:
-    """Install MOPS as a system service."""
+def _save_config(
+    mode: str = "both",
+    port: int = DEFAULT_BASE_PORT,
+    strategy: str = STRATEGY_RANDOM,
+    bind: str = "",
+) -> None:
+    _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _CONFIG_FILE.write_text(json.dumps({"mode": mode, "port": port, "strategy": strategy, "bind": bind}))
+
+
+def _load_config() -> dict:
+    if _CONFIG_FILE.exists():
+        return json.loads(_CONFIG_FILE.read_text())
+    return {"mode": "both", "port": DEFAULT_BASE_PORT, "strategy": STRATEGY_RANDOM, "bind": ""}
+
+
+# ── Public API ──
+
+
+def install() -> None:
+    """Install MOPS as a system service (no runtime params)."""
     if sys.platform == "win32":
-        _install_windows(mode, base_port, strategy)
+        _install_windows()
     else:
-        _install_linux(mode, base_port, strategy)
-    logger.info(f"Service installed (mode={mode}, port={base_port}, strategy={strategy})")
+        _install_linux()
+    logger.info("Service installed")
 
 
 def uninstall() -> None:
@@ -46,8 +72,15 @@ def uninstall() -> None:
     logger.info("Service uninstalled")
 
 
-def start() -> None:
-    """Start the MOPS service."""
+def start(
+    mode: str = "both",
+    port: int = DEFAULT_BASE_PORT,
+    strategy: str = STRATEGY_RANDOM,
+    bind: str = "",
+) -> None:
+    """Start the MOPS service with runtime params."""
+    _save_config(mode=mode, port=port, strategy=strategy, bind=bind)
+    logger.info(f"Config saved (mode={mode}, port={port}, strategy={strategy}, bind={bind!r})")
     if sys.platform == "win32":
         _run_cmd(["sc", "start", "MOPS"])
     else:
@@ -74,9 +107,10 @@ def status() -> dict:
 
 # ── Windows ──
 
-def _install_windows(mode: str, base_port: int, strategy: str) -> None:
+
+def _install_windows() -> None:
     exe = _get_exe_path()
-    bin_path = f"{exe} --service --mode {mode} --port {base_port} --strategy {strategy}"
+    bin_path = f"{exe} --service"
     _run_cmd([
         "sc", "create", "MOPS",
         f"binPath= {bin_path}",
@@ -107,7 +141,7 @@ UNIT_CONTENT = textwrap.dedent("""\
 
     [Service]
     Type=simple
-    ExecStart={exe} --service --mode {mode} --port {port} --strategy {strategy}
+    ExecStart={exe} --service
     Restart=on-failure
     RestartSec=5
 
@@ -116,11 +150,9 @@ UNIT_CONTENT = textwrap.dedent("""\
 """)
 
 
-def _install_linux(mode: str, base_port: int, strategy: str) -> None:
+def _install_linux() -> None:
     exe = _get_exe_path()
-    content = UNIT_CONTENT.format(
-        exe=exe, mode=mode, port=base_port, strategy=strategy
-    )
+    content = UNIT_CONTENT.format(exe=exe)
     unit_path = _SERVICE_DIR / "mops.service"
     unit_path.write_text(content)
     _run_cmd(["systemctl", "daemon-reload"])

@@ -25,10 +25,10 @@ uv run python -m mops run both        # 或者混合模式
 
 ```
 mops                                              # 默认 both 模式启动
-mops run        [server|client|both] [--port 10080] [--strategy random|hash] [--listen 127.0.0.1] [--weight 1]
-mops service install [--mode both] [--port 10080] [--strategy random]
+mops run        [server|client|both] [--port 10080] [--strategy random|hash] [--listen 127.0.0.1] [--weight 1] [--bind <ip>]
+mops service install                                # 注册服务（无运行时参数）
+mops service start     [--mode both] [--port 10080] [--strategy random] [--bind <ip>]
 mops service uninstall
-mops service start
 mops service stop
 mops service status
 mops service log [-n 50] [-s keyword]             # 查看日志
@@ -45,8 +45,8 @@ mops proxy status                                 # 查看代理状态
 | `--strategy` | 负载均衡策略: `random` 或 `hash` | random |
 | `--weight` | Server 权重 (仅 server 模式) | 1 |
 | `--listen` | Client 监听地址 (仅 client/both 模式) | 127.0.0.1 |
-| `--service` | 服务模式运行，无交互式输出 | false |
-| `--mode` | 安装服务时的模式: server/client/both | both |
+| `--bind` | mDNS 广播的 IP 地址（通过路由表自动检测） | auto |
+| `--mode` | 运行模式: server/client/both | both |
 
 ### 端口分配
 
@@ -153,8 +153,8 @@ mops service log -s "error"        # 搜索关键词
 ### Linux (systemd)
 
 ```bash
-uv run python -m mops service install --mode both --port 10080
-uv run python -m mops service start
+uv run python -m mops service install
+uv run python -m mops service start --mode both --port 10080 --bind 192.168.1.100
 uv run python -m mops service status
 uv run python -m mops service stop
 uv run python -m mops service uninstall
@@ -163,8 +163,8 @@ uv run python -m mops service uninstall
 ### Windows (sc)
 
 ```powershell
-uv run python -m mops service install --mode both --port 10080
-uv run python -m mops service start
+uv run python -m mops service install
+uv run python -m mops service start --mode both --port 10080 --bind 192.168.1.100
 uv run python -m mops service status
 uv run python -m mops service stop
 uv run python -m mops service uninstall
@@ -206,25 +206,25 @@ uv run python build.py              # Nuitka 打包
 ### 项目结构
 
 ```
-mops/
-├── mops/                 # 源码
-│   ├── __init__.py       # 版本号
-│   ├── __main__.py       # CLI 入口
-│   ├── protocol.py       # 共享常量 + 日志路径
-│   ├── stats.py          # 流量统计
-│   ├── tunnel.py         # 双向流量拷贝
-│   ├── server.py         # TCP 透传 + mDNS 广播
-│   ├── client.py         # SOCKS5 + HTTP CONNECT 代理
-│   ├── discovery.py      # mDNS 服务浏览
-│   ├── scheduler.py      # 负载均衡 + 熔断
-│   ├── api.py            # REST API
-│   ├── service.py        # 系统服务管理
-│   └── proxy.py          # 系统代理配置
-├── tests/                # 测试 (161 个)
-├── build.py              # Nuitka 打包脚本
-├── pyproject.toml        # 项目配置
-├── .gitignore            # Git 忽略规则
-└── LICENSE               # Apache License 2.0
+MOPS/
+├── src/mops/           # 源码
+│   ├── __init__.py     # 版本号
+│   ├── __main__.py     # CLI 入口
+│   ├── protocol.py     # 共享常量 + 日志路径
+│   ├── stats.py        # 流量统计
+│   ├── tunnel.py       # 双向流量拷贝
+│   ├── server.py       # TCP 透传 + mDNS 广播
+│   ├── client.py       # SOCKS5 + HTTP CONNECT 代理
+│   ├── discovery.py    # mDNS 服务浏览
+│   ├── scheduler.py    # 负载均衡 + 熔断
+│   ├── api.py          # REST API
+│   ├── service.py      # 系统服务管理
+│   └── proxy.py        # 系统代理配置
+├── tests/              # 测试 (164 个)
+├── build.py            # Nuitka 打包脚本
+├── pyproject.toml      # 项目配置 (hatchling)
+├── .gitignore          # Git 忽略规则
+└── LICENSE             # Apache License 2.0
 ```
 
 ## License

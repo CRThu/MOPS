@@ -25,30 +25,18 @@ class MdnsBroadcaster:
         self._zc: Zeroconf | None = None
         self._service_info: ServiceInfo | None = None
 
-    async def register(self, port: int, weight: int = 1, ttl: int = 60) -> None:
+    async def register(self, port: int, weight: int = 1, ttl: int = 60, bind: str = "") -> None:
         import socket
 
         hostname = socket.gethostname()
         service_name = f"mops-server-{hostname}.{MOPS_SERVICE_TYPE}"
 
-        # Resolve local IP addresses
-        addresses = []
-        try:
-            for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
-                ip = info[4][0]
-                if not ip.startswith("127."):
-                    addresses.append(socket.inet_aton(ip))
-        except Exception:
-            pass
-        if not addresses:
-            # Fallback: connect to a public IP to find our local address
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.connect(("8.8.8.8", 80))
-                addresses.append(socket.inet_aton(s.getsockname()[0]))
-                s.close()
-            except Exception:
-                addresses.append(socket.inet_aton("127.0.0.1"))
+        if bind:
+            # User specified bind address
+            addresses = [socket.inet_aton(bind)]
+        else:
+            # Auto-detect: prefer LAN IPs, avoid virtual adapters
+            addresses = self._detect_lan_ip()
 
         self._zc = Zeroconf()
 
@@ -69,6 +57,34 @@ class MdnsBroadcaster:
         resolved_ip = socket.inet_ntoa(addresses[0])
         logger.info(f"mDNS service registered: {service_name} -> {resolved_ip}:{port} (TTL={ttl}s)")
 
+    @staticmethod
+    def _detect_lan_ip() -> list:
+        """Detect LAN IP via routing table (UDP connect to public IP)."""
+        import socket
+
+        # Primary: routing-based detection — OS picks the real出口网卡
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return [socket.inet_aton(ip)]
+        except Exception:
+            pass
+
+        # Fallback: enumerate all non-loopback interfaces
+        candidates = []
+        excluded = ("127.", "0.", "224.", "169.254.")
+        try:
+            for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                ip = info[4][0]
+                if not any(ip.startswith(p) for p in excluded):
+                    candidates.append(socket.inet_aton(ip))
+        except Exception:
+            pass
+
+        return candidates or [socket.inet_aton("127.0.0.1")]
+
     async def unregister(self) -> None:
         if self._zc and self._service_info:
             await self._zc.async_unregister_service(self._service_info)
@@ -86,11 +102,13 @@ class MopsServer:
         port: int,
         weight: int = 1,
         mdns_ttl: int = 60,
+        bind: str = "",
         stats: TrafficStats | None = None,
     ) -> None:
         self.port = port
         self.weight = weight
         self.mdns_ttl = mdns_ttl
+        self.bind = bind
         self._broadcaster = MdnsBroadcaster()
         self._server: asyncio.Server | None = None
         self._stats = stats
@@ -141,7 +159,7 @@ class MopsServer:
         )
         logger.info(f"Server listening on 0.0.0.0:{self.port}")
 
-        await self._broadcaster.register(self.port, self.weight, self.mdns_ttl)
+        await self._broadcaster.register(self.port, self.weight, self.mdns_ttl, self.bind)
 
         async with self._server:
             await self._server.serve_forever()

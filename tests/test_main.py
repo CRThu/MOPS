@@ -37,11 +37,9 @@ class TestBuildParser:
 
     def test_service_install_subcommand(self):
         parser = build_parser()
-        args = parser.parse_args(["service", "install", "--mode", "server", "--port", "30080"])
+        args = parser.parse_args(["service", "install"])
         assert args.command == "service"
         assert args.service_action == "install"
-        assert args.mode == "server"
-        assert args.port == 30080
 
     def test_service_uninstall_subcommand(self):
         parser = build_parser()
@@ -51,9 +49,19 @@ class TestBuildParser:
 
     def test_service_start_subcommand(self):
         parser = build_parser()
-        args = parser.parse_args(["service", "start"])
+        args = parser.parse_args(["service", "start", "--mode", "server", "--port", "30080", "--strategy", "hash"])
         assert args.command == "service"
         assert args.service_action == "start"
+        assert args.mode == "server"
+        assert args.port == 30080
+        assert args.strategy == "hash"
+
+    def test_service_start_subcommand_defaults(self):
+        parser = build_parser()
+        args = parser.parse_args(["service", "start"])
+        assert args.mode == "both"
+        assert args.port == 10080
+        assert args.strategy == "random"
 
     def test_service_stop_subcommand(self):
         parser = build_parser()
@@ -208,9 +216,10 @@ class TestCmdFunctions:
     def test_cmd_install(self):
         from mops.__main__ import cmd_install
         from argparse import Namespace
-        args = Namespace(mode="both", port=10080, strategy="random")
-        with patch("mops.service.install"):
+        args = Namespace()
+        with patch("mops.service.install") as mock_install:
             cmd_install(args)
+            mock_install.assert_called_once()
 
     def test_cmd_uninstall(self):
         from mops.__main__ import cmd_uninstall
@@ -222,9 +231,10 @@ class TestCmdFunctions:
     def test_cmd_start(self):
         from mops.__main__ import cmd_start
         from argparse import Namespace
-        args = Namespace()
-        with patch("mops.service.start"):
+        args = Namespace(mode="both", port=10080, strategy="random", bind="")
+        with patch("mops.service.start") as mock_start:
             cmd_start(args)
+            mock_start.assert_called_once_with(mode="both", port=10080, strategy="random", bind="")
 
     def test_cmd_stop(self):
         from mops.__main__ import cmd_stop
