@@ -1,4 +1,4 @@
-"""MOPS Client: SOCKS5 + HTTP CONNECT proxy with load-balanced tunneling."""
+"""MOPS Client: SOCKS5 + HTTP proxy (CONNECT & plain) with load-balanced tunneling."""
 
 from __future__ import annotations
 
@@ -48,17 +48,20 @@ class MopsClient:
             if first_byte[0] == 0x05:
                 await self._handle_socks5(reader, writer, first_byte)
             else:
-                # HTTP CONNECT: we already consumed the first byte, need to put it back
+                # HTTP: we already consumed the first byte, need to put it back
                 rest = await reader.readline()
                 first_line = first_byte + rest
-                await self._handle_http_connect(reader, writer, first_line)
+                await self._handle_http(reader, writer, first_line)
         except (ConnectionError, OSError) as e:
             logger.debug(f"Connection error: {e}")
         except Exception as e:
             logger.error(f"Unexpected error in handle_proxy: {e}")
         finally:
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            except RuntimeError:
+                pass
 
     async def _handle_socks5(
         self,
@@ -122,21 +125,33 @@ class MopsClient:
 
         await self._connect_and_tunnel(reader, writer, target_host, target_port)
 
-    async def _handle_http_connect(
+    async def _handle_http(
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
         first_line: bytes,
     ) -> None:
-        # Parse "CONNECT host:port HTTP/1.1\r\n"
         line = first_line.decode(errors="ignore").strip()
         parts = line.split()
-        if len(parts) < 2 or parts[0].upper() != "CONNECT":
+        if len(parts) < 3:
             writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
             await writer.drain()
             return
 
-        addr = parts[1]
+        method = parts[0].upper()
+        url = parts[1]
+
+        if method == "CONNECT":
+            await self._handle_http_connect(reader, writer, url)
+        else:
+            await self._handle_http_request(reader, writer, method, url, first_line)
+
+    async def _handle_http_connect(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        addr: str,
+    ) -> None:
         if ":" in addr:
             host, port_str = addr.rsplit(":", 1)
             port = int(port_str)
@@ -152,11 +167,88 @@ class MopsClient:
 
         logger.debug(f"HTTP CONNECT: {host}:{port}")
 
-        # Send 200 OK
         writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         await writer.drain()
 
         await self._connect_and_tunnel(reader, writer, host, port)
+
+    async def _handle_http_request(
+        self,
+        client_reader: asyncio.StreamReader,
+        client_writer: asyncio.StreamWriter,
+        method: str,
+        url: str,
+        first_line: bytes,
+    ) -> None:
+        """Handle plain HTTP proxy: GET http://host/path → connect to host, forward as GET /path."""
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        host = parsed.hostname
+        port = parsed.port or 80
+        path = parsed.path or "/"
+        if parsed.query:
+            path += "?" + parsed.query
+
+        logger.debug(f"HTTP {method}: {host}:{port}{path}")
+
+        try:
+            node = self._scheduler.select(target_host=host)
+        except NoAvailableNodeError:
+            logger.error("No available nodes for tunneling")
+            client_writer.write(b"HTTP/1.1 503 Service Unavailable\r\n\r\n")
+            await client_writer.drain()
+            return
+
+        node_key = f"{node.ip}:{node.port}"
+
+        try:
+            server_reader, server_writer = await asyncio.open_connection(
+                node.ip, node.port
+            )
+
+            # Send tunnel header
+            header = f"{host}:{port}\n"
+            server_writer.write(header.encode())
+            await server_writer.drain()
+
+            # Read full request from client
+            request_lines = [first_line]
+            while True:
+                line = await client_reader.readline()
+                request_lines.append(line)
+                if line == b"\r\n" or not line:
+                    break
+
+            # Rewrite request: change absolute URL to path
+            original_line = first_line.decode(errors="ignore").strip()
+            first_parts = original_line.split(None, 2)
+            new_first_line = f"{first_parts[0]} {path} {first_parts[2]}\r\n"
+            request_lines[0] = new_first_line.encode()
+
+            # Forward rewritten request to server
+            for line in request_lines:
+                server_writer.write(line)
+            await server_writer.drain()
+
+            # Bidirectional tunnel
+            if self._stats:
+                self._stats.active_conns += 1
+            try:
+                await tunnel(
+                    client_reader, client_writer,
+                    server_reader, server_writer,
+                    stats=self._stats, node_name=node_key,
+                )
+            finally:
+                if self._stats:
+                    self._stats.active_conns -= 1
+
+        except (ConnectionError, OSError) as e:
+            logger.warning(f"Tunnel connection failed to {node_key}: {e}")
+            self._scheduler.report_fail(node)
+            client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+            await client_writer.drain()
 
     async def _connect_and_tunnel(
         self,

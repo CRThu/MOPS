@@ -1,52 +1,62 @@
-# MOPS — Multi-node Outbound Proxy System
+# MOPS
 
-轻量级分布式出口负载均衡系统，通过局域网内多台设备的 IP 聚合，绕过网关单 IP 限速。
+多节点出口代理系统 — 轻量级分布式出口负载均衡系统。
 
-## 架构
+通过局域网内多台设备的 IP 聚合，绕过网关单 IP 限速。
 
-```
-App → :8080 (local-ingress) → egress-chain (round-robin) → LAN节点 :10080 (lan-egress) → 公网
-```
+## 功能特性
 
-- **Server**: 对外出口，监听 TCP 端口，通过 mDNS 广播自己的存在
-- **Client**: 本机代理入口，SOCKS5 + HTTP CONNECT，自动发现 Server 并负载均衡
-- **Both**: 同时运行 Server + Client + API
+- **多协议支持** — 同一端口自动识别 SOCKS5 / HTTP CONNECT / HTTP 代理（GET/POST），类似 Clash
+- **零配置发现** — 基于 mDNS，Server 广播、Client 自动发现，无需手动配置节点列表
+- **负载均衡** — `random`（随机）/ `hash`（会话保持）两种策略
+- **健康检查** — mDNS TTL 60s + 被动熔断（连续失败自动隔离，30s 后恢复）
+- **系统代理** — 一键设置/取消系统全局代理（Windows / macOS / Linux）
+- **REST API** — 实时查看节点状态、流量统计
 
 ## 快速开始
 
 ```bash
+# 安装依赖
 uv sync
-uv run python -m mops run server      # 在出口机上启动 Server
-uv run python -m mops run client      # 在主力机上启动 Client
-uv run python -m mops run both        # 或者混合模式
+
+# 出口机启动 Server（对外暴露出口）
+uv run python -m mops run server
+
+# 主力机启动 Client（本机代理入口）
+uv run python -m mops run client
+
+# 或者混合模式（同时跑 Server + Client）
+uv run python -m mops run both
 ```
+
+Client 启动后，默认监听 `127.0.0.1:10081`，自动发现局域网内的 Server 节点。
 
 ## CLI 参考
 
-```
+```bash
 mops                                              # 默认 both 模式启动
 mops run        [server|client|both] [--port 10080] [--strategy random|hash] [--listen 127.0.0.1] [--weight 1] [--bind <ip>]
-mops service install                                # 注册服务（无运行时参数）
-mops service start     [--mode both] [--port 10080] [--strategy random] [--bind <ip>]
-mops service uninstall
-mops service stop
-mops service status
-mops service log [-n 50] [-s keyword]             # 查看日志
-mops proxy on   [--port 10081]                    # 设置系统全局代理
-mops proxy off                                    # 取消系统全局代理
-mops proxy status                                 # 查看代理状态
+mops service install                              # 注册服务（无运行时参数）
+mops service start   [--mode both] [--port 10080] [--strategy random] [--bind <ip>]
+mops service stop                                  # 停止服务
+mops service status                                # 查看服务状态
+mops service uninstall                             # 卸载服务
+mops service log    [-n 50] [-s keyword]           # 查看日志
+mops proxy on     [--port 10081]                   # 设置系统全局代理
+mops proxy off                                     # 取消系统全局代理
+mops proxy status                                  # 查看代理状态
 ```
 
 ### 参数说明
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `--port` | 基础端口，所有端口从此衍生 | 10080 |
-| `--strategy` | 负载均衡策略: `random` 或 `hash` | random |
-| `--weight` | Server 权重 (仅 server 模式) | 1 |
-| `--listen` | Client 监听地址 (仅 client/both 模式) | 127.0.0.1 |
-| `--bind` | mDNS 广播的 IP 地址（通过路由表自动检测） | auto |
-| `--mode` | 运行模式: server/client/both | both |
+| `--port` | 基础端口，所有端口从此衍生 | `10080` |
+| `--strategy` | 负载均衡策略: `random` 或 `hash` | `random` |
+| `--weight` | Server 权重 (仅 server 模式) | `1` |
+| `--listen` | Client 监听地址 | `127.0.0.1` |
+| `--bind` | mDNS 广播的 IP 地址（通过路由表自动检测） | `auto` |
+| `--mode` | 运行模式: `server` / `client` / `both` | `both` |
 
 ### 端口分配
 
@@ -58,24 +68,65 @@ mops proxy status                                 # 查看代理状态
 
 ## 代理协议
 
-### SOCKS5（无认证）
+同一端口，自动识别协议类型，无需手动配置：
 
-```
-客户端 → Client:0x05 0x01 0x00 (握手)
-Client → 客户端: 0x05 0x00 (确认)
-客户端 → Client: CONNECT 请求
-Client → Server: host:port\n (隧道头)
-Server → 目标: TCP 连接
-双向转发
+| 协议 | 客户端请求 | 用途 |
+|------|------------|------|
+| **SOCKS5** | `0x05 0x01 0x00` 握手 | TCP 代理（HTTP/HTTPS/任意 TCP） |
+| **HTTP CONNECT** | `CONNECT host:port HTTP/1.1` | HTTPS 隧道 |
+| **HTTP 代理** | `GET http://host/path HTTP/1.1` | 普通 HTTP 代理（GET/POST 等） |
+
+## 使用示例
+
+### curl 测试
+
+```bash
+# SOCKS5 代理
+curl.exe -x socks5://127.0.0.1:10081 ifconfig.me
+
+# HTTP 代理（支持 HTTP 和 HTTPS）
+curl.exe -x http://127.0.0.1:10081 ifconfig.me
+curl.exe -x http://127.0.0.1:10081 https://ifconfig.me
+
+# 不走代理（直连对比）
+curl.exe ifconfig.me
 ```
 
-### HTTP CONNECT
+> **提示**: Windows 上如果系统已配置代理（如 Clash 在 `127.0.0.1:7890`），测试时需加 `--noproxy "*"` 绕过。
 
+### 设置系统代理
+
+```bash
+# 开启系统全局代理（所有应用流量走 MOPS）
+mops proxy on
+
+# 关闭并恢复原设置
+mops proxy off
+
+# 查看当前代理状态
+mops proxy status
 ```
-客户端 → Client: CONNECT example.com:443 HTTP/1.1\r\n...
-Client → 客户端: HTTP/1.1 200 Connection Established\r\n\r\n
-Client → Server: host:port\n
-双向转发
+
+### Clash / Clash Verge 配置
+
+1. 在 Clash Verge 中，选中订阅节点 → 点「编辑」，添加以下内容：
+
+```yaml
+prepend:
+  - type: 'socks5'
+    name: 'SOCKS5 127.0.0.1:10081'
+    server: '127.0.0.1'
+    port: 10081
+```
+
+2. 保存后，在代理页面右上角「链式代理」中选择 `SOCKS5 127.0.0.1:10081` 节点
+
+> **说明**: `prepend` 会在订阅节点前插入 MOPS 节点，通过链式代理让流量先走 MOPS，再走原有代理节点。
+
+### 查看状态
+
+```bash
+curl http://127.0.0.1:10082/status
 ```
 
 ## REST API
@@ -84,7 +135,8 @@ Client → Server: host:port\n
 GET http://127.0.0.1:10082/status
 ```
 
-响应示例：
+<details>
+<summary>响应示例</summary>
 
 ```json
 {
@@ -115,38 +167,19 @@ GET http://127.0.0.1:10082/status
 }
 ```
 
-## 负载均衡策略
+</details>
+
+## 负载均衡
 
 | 策略 | 说明 |
 |------|------|
-| `random`（默认） | 随机选择节点，流量最均匀 |
+| `random` | 随机选择节点，流量最均匀 |
 | `hash` | 按 `client_ip:target_host` 哈希，会话保持 |
 
 ## 健康检查
 
-- **mDNS 广播**: Server 每 60 秒刷新 TTL，Client 自动感知节点加入/离开
-- **被动熔断**: 连续 2 次连接失败 → 节点移入观察池，30 秒后自动恢复
-
-## 系统代理
-
-一键设置/取消系统全局代理，流量自动走 MOPS Client：
-
-```bash
-mops proxy on              # Windows: 修改注册表; macOS: networksetup; Linux: 写 env 文件
-mops proxy off             # 恢复原设置
-mops proxy status          # 查看当前代理状态
-mops proxy on --port 20081 # 指定端口
-```
-
-## 日志
-
-日志自动保存到 `~/.mops/logs/mops.log`（10MB 轮转，保留 7 天）：
-
-```bash
-mops service log                   # 最近 50 行
-mops service log -n 100            # 最近 100 行
-mops service log -s "error"        # 搜索关键词
-```
+- **mDNS 广播** — Server 每 60 秒刷新 TTL，Client 自动感知节点加入/离开
+- **被动熔断** — 连续 2 次连接失败 → 节点移入观察池，30 秒后自动恢复
 
 ## 系统服务
 
@@ -170,29 +203,14 @@ uv run python -m mops service stop
 uv run python -m mops service uninstall
 ```
 
-## 使用示例
+## 日志
 
-### 测试代理连接
-
-```bash
-# SOCKS5 代理
-curl.exe --proxy socks5://127.0.0.1:10081 http://httpbin.org/ip
-
-# HTTP 代理
-curl.exe --proxy http://127.0.0.1:10081 http://httpbin.org/ip
-```
-
-### 浏览器配置
-
-在浏览器代理设置中配置：
-- 类型: SOCKS5 或 HTTP
-- 地址: 127.0.0.1
-- 端口: 10081
-
-### 检查状态
+日志自动保存到 `~/.mops/logs/mops.log`（10MB 轮转，保留 7 天）：
 
 ```bash
-curl http://127.0.0.1:10082/status
+mops service log                # 最近 50 行
+mops service log -n 100         # 最近 100 行
+mops service log -s "error"     # 搜索关键词
 ```
 
 ## 开发
@@ -200,33 +218,33 @@ curl http://127.0.0.1:10082/status
 ```bash
 uv sync --extra dev
 uv run pytest tests/ -v --cov=mops
-uv run python build.py              # Nuitka 打包
+uv run python build.py          # Nuitka 打包
 ```
 
 ### 项目结构
 
 ```
 MOPS/
-├── src/mops/           # 源码
-│   ├── __init__.py     # 版本号
-│   ├── __main__.py     # CLI 入口
-│   ├── protocol.py     # 共享常量 + 日志路径
-│   ├── stats.py        # 流量统计
-│   ├── tunnel.py       # 双向流量拷贝
-│   ├── server.py       # TCP 透传 + mDNS 广播
-│   ├── client.py       # SOCKS5 + HTTP CONNECT 代理
-│   ├── discovery.py    # mDNS 服务浏览
-│   ├── scheduler.py    # 负载均衡 + 熔断
-│   ├── api.py          # REST API
-│   ├── service.py      # 系统服务管理
-│   └── proxy.py        # 系统代理配置
-├── tests/              # 测试 (164 个)
-├── build.py            # Nuitka 打包脚本
-├── pyproject.toml      # 项目配置 (hatchling)
-├── .gitignore          # Git 忽略规则
-└── LICENSE             # Apache License 2.0
+├── src/mops/
+│   ├── __init__.py       # 版本号
+│   ├── __main__.py       # CLI 入口
+│   ├── protocol.py       # 共享常量 + 日志路径
+│   ├── stats.py          # 流量统计
+│   ├── tunnel.py         # 双向流量拷贝
+│   ├── server.py         # TCP 透传 + mDNS 广播
+│   ├── client.py         # SOCKS5 + HTTP CONNECT + HTTP 代理
+│   ├── discovery.py      # mDNS 服务浏览
+│   ├── scheduler.py      # 负载均衡 + 熔断
+│   ├── api.py            # REST API
+│   ├── service.py        # 系统服务管理
+│   └── proxy.py          # 系统代理配置
+├── tests/                # 175 个测试，88% 覆盖率
+├── build.py              # Nuitka 打包脚本
+├── pyproject.toml        # 项目配置 (hatchling)
+├── .gitignore
+└── LICENSE               # Apache License 2.0
 ```
 
-## License
+## 许可证
 
-Apache License 2.0
+[Apache License 2.0](LICENSE)

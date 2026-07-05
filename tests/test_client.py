@@ -1,4 +1,4 @@
-"""Tests for MopsClient: SOCKS5, HTTP CONNECT, scheduling, circuit breaker."""
+"""Tests for MopsClient: SOCKS5, HTTP CONNECT, HTTP proxy, scheduling, circuit breaker."""
 
 import asyncio
 import struct
@@ -198,6 +198,59 @@ class TestSOCKS5Parsing:
             assert args[0][3] == 443
 
 
+class TestHTTPRouting:
+    """Test HTTP protocol routing (CONNECT vs plain HTTP)."""
+
+    @pytest.mark.asyncio
+    async def test_handle_http_routes_connect(self):
+        client = MopsClient(listen_port=10081)
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+
+        with patch.object(client, "_handle_http_connect", new_callable=AsyncMock) as mock_connect:
+            await client._handle_http(reader, writer, b"CONNECT example.com:443 HTTP/1.1\r\n")
+            mock_connect.assert_called_once_with(reader, writer, "example.com:443")
+
+    @pytest.mark.asyncio
+    async def test_handle_http_routes_get(self):
+        client = MopsClient(listen_port=10081)
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+
+        with patch.object(client, "_handle_http_request", new_callable=AsyncMock) as mock_req:
+            await client._handle_http(reader, writer, b"GET http://example.com/path HTTP/1.1\r\n")
+            mock_req.assert_called_once_with(reader, writer, "GET", "http://example.com/path", b"GET http://example.com/path HTTP/1.1\r\n")
+
+    @pytest.mark.asyncio
+    async def test_handle_http_routes_post(self):
+        client = MopsClient(listen_port=10081)
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+
+        with patch.object(client, "_handle_http_request", new_callable=AsyncMock) as mock_req:
+            await client._handle_http(reader, writer, b"POST http://example.com/api HTTP/1.1\r\n")
+            mock_req.assert_called_once_with(reader, writer, "POST", "http://example.com/api", b"POST http://example.com/api HTTP/1.1\r\n")
+
+    @pytest.mark.asyncio
+    async def test_handle_http_bad_request(self):
+        client = MopsClient(listen_port=10081)
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+
+        await client._handle_http(reader, writer, b"BAD\r\n")
+        writer.write.assert_called_once_with(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+
+
 class TestHTTPCONNECT:
     """Test HTTP CONNECT proxy handling."""
 
@@ -232,16 +285,234 @@ class TestHTTPCONNECT:
         reader.readline = mock_readline
 
         with patch("mops.client.MopsClient._connect_and_tunnel", new_callable=AsyncMock) as mock_connect:
-            await client._handle_http_connect(
-                reader, writer, b"CONNECT example.com:443 HTTP/1.1\r\n"
-            )
+            await client._handle_http_connect(reader, writer, "example.com:443")
             mock_connect.assert_called_once()
             args = mock_connect.call_args
             assert args[0][2] == "example.com"
             assert args[0][3] == 443
 
+
+class TestHTTPRequest:
+    """Test plain HTTP proxy (GET/POST/etc)."""
+
     @pytest.mark.asyncio
-    async def test_http_connect_bad_request(self):
+    async def test_http_get_request(self):
+        client = MopsClient(listen_port=10081)
+        client._scheduler.add_node(NodeInfo(ip="10.0.0.1", port=10080))
+
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+
+        header_lines = [
+            b"Host: httpbin.org\r\n",
+            b"User-Agent: curl/7.0\r\n",
+            b"\r\n",
+        ]
+        line_idx = 0
+        async def mock_readline():
+            nonlocal line_idx
+            if line_idx < len(header_lines):
+                result = header_lines[line_idx]
+                line_idx += 1
+                return result
+            return b""
+
+        reader.readline = mock_readline
+
+        mock_server_reader = AsyncMock(spec=asyncio.StreamReader)
+        mock_server_writer = AsyncMock(spec=asyncio.StreamWriter)
+        mock_server_writer.write = MagicMock()
+        mock_server_writer.drain = AsyncMock()
+
+        with patch("mops.client.asyncio.open_connection", new_callable=AsyncMock, return_value=(mock_server_reader, mock_server_writer)), \
+             patch("mops.client.tunnel", new_callable=AsyncMock) as mock_tunnel:
+            await client._handle_http_request(
+                reader, writer, "GET", "http://httpbin.org/ip", b"GET http://httpbin.org/ip HTTP/1.1\r\n"
+            )
+            # Verify tunnel header sent
+            mock_server_writer.write.assert_any_call(b"httpbin.org:80\n")
+            # Verify rewritten request was sent (GET /ip not GET http://httpbin.org/ip)
+            mock_server_writer.write.assert_any_call(b"GET /ip HTTP/1.1\r\n")
+            # Verify tunnel was called
+            mock_tunnel.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_http_post_request(self):
+        client = MopsClient(listen_port=10081)
+        client._scheduler.add_node(NodeInfo(ip="10.0.0.1", port=10080))
+
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+
+        header_lines = [
+            b"Host: api.example.com\r\n",
+            b"Content-Type: application/json\r\n",
+            b"Content-Length: 2\r\n",
+            b"\r\n",
+        ]
+        line_idx = 0
+        async def mock_readline():
+            nonlocal line_idx
+            if line_idx < len(header_lines):
+                result = header_lines[line_idx]
+                line_idx += 1
+                return result
+            return b""
+
+        reader.readline = mock_readline
+        reader.read = AsyncMock(return_value=b"{}")
+
+        mock_server_reader = AsyncMock(spec=asyncio.StreamReader)
+        mock_server_writer = AsyncMock(spec=asyncio.StreamWriter)
+        mock_server_writer.write = MagicMock()
+        mock_server_writer.drain = AsyncMock()
+
+        with patch("mops.client.asyncio.open_connection", new_callable=AsyncMock, return_value=(mock_server_reader, mock_server_writer)), \
+             patch("mops.client.tunnel", new_callable=AsyncMock) as mock_tunnel:
+            await client._handle_http_request(
+                reader, writer, "POST", "http://api.example.com/data", b"POST http://api.example.com/data HTTP/1.1\r\n"
+            )
+            mock_server_writer.write.assert_any_call(b"api.example.com:80\n")
+            mock_server_writer.write.assert_any_call(b"POST /data HTTP/1.1\r\n")
+            mock_tunnel.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_http_request_no_nodes(self):
+        client = MopsClient(listen_port=10081)
+
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+
+        await client._handle_http_request(
+            reader, writer, "GET", "http://example.com/", b"GET http://example.com/ HTTP/1.1\r\n"
+        )
+        writer.write.assert_called_once_with(b"HTTP/1.1 503 Service Unavailable\r\n\r\n")
+
+    @pytest.mark.asyncio
+    async def test_http_request_with_query_string(self):
+        client = MopsClient(listen_port=10081)
+        client._scheduler.add_node(NodeInfo(ip="10.0.0.1", port=10080))
+
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+
+        header_lines = [b"\r\n"]
+        line_idx = 0
+        async def mock_readline():
+            nonlocal line_idx
+            if line_idx < len(header_lines):
+                result = header_lines[line_idx]
+                line_idx += 1
+                return result
+            return b""
+        reader.readline = mock_readline
+
+        mock_server_reader = AsyncMock(spec=asyncio.StreamReader)
+        mock_server_writer = AsyncMock(spec=asyncio.StreamWriter)
+        mock_server_writer.write = MagicMock()
+        mock_server_writer.drain = AsyncMock()
+
+        with patch("mops.client.asyncio.open_connection", new_callable=AsyncMock, return_value=(mock_server_reader, mock_server_writer)), \
+             patch("mops.client.tunnel", new_callable=AsyncMock):
+            await client._handle_http_request(
+                reader, writer, "GET", "http://api.example.com/search?q=test&page=1",
+                b"GET http://api.example.com/search?q=test&page=1 HTTP/1.1\r\n"
+            )
+            mock_server_writer.write.assert_any_call(b"api.example.com:80\n")
+            mock_server_writer.write.assert_any_call(b"GET /search?q=test&page=1 HTTP/1.1\r\n")
+
+    @pytest.mark.asyncio
+    async def test_http_request_custom_port(self):
+        client = MopsClient(listen_port=10081)
+        client._scheduler.add_node(NodeInfo(ip="10.0.0.1", port=10080))
+
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+
+        header_lines = [b"\r\n"]
+        line_idx = 0
+        async def mock_readline():
+            nonlocal line_idx
+            if line_idx < len(header_lines):
+                result = header_lines[line_idx]
+                line_idx += 1
+                return result
+            return b""
+        reader.readline = mock_readline
+
+        mock_server_reader = AsyncMock(spec=asyncio.StreamReader)
+        mock_server_writer = AsyncMock(spec=asyncio.StreamWriter)
+        mock_server_writer.write = MagicMock()
+        mock_server_writer.drain = AsyncMock()
+
+        with patch("mops.client.asyncio.open_connection", new_callable=AsyncMock, return_value=(mock_server_reader, mock_server_writer)), \
+             patch("mops.client.tunnel", new_callable=AsyncMock):
+            await client._handle_http_request(
+                reader, writer, "GET", "http://internal.dev:8080/api",
+                b"GET http://internal.dev:8080/api HTTP/1.1\r\n"
+            )
+            mock_server_writer.write.assert_any_call(b"internal.dev:8080\n")
+            mock_server_writer.write.assert_any_call(b"GET /api HTTP/1.1\r\n")
+
+    @pytest.mark.asyncio
+    async def test_http_request_connection_error(self):
+        client = MopsClient(listen_port=10081)
+        client._scheduler.add_node(NodeInfo(ip="10.0.0.1", port=10080))
+
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+
+        header_lines = [b"\r\n"]
+        line_idx = 0
+        async def mock_readline():
+            nonlocal line_idx
+            if line_idx < len(header_lines):
+                result = header_lines[line_idx]
+                line_idx += 1
+                return result
+            return b""
+        reader.readline = mock_readline
+
+        with patch("mops.client.asyncio.open_connection", new_callable=AsyncMock, side_effect=ConnectionError("refused")), \
+             patch("mops.client.Scheduler.report_fail") as mock_fail:
+            await client._handle_http_request(
+                reader, writer, "GET", "http://example.com/", b"GET http://example.com/ HTTP/1.1\r\n"
+            )
+            writer.write.assert_called_once_with(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+            mock_fail.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_http_short_line(self):
         client = MopsClient(listen_port=10081)
         reader = AsyncMock(spec=asyncio.StreamReader)
         writer = AsyncMock(spec=asyncio.StreamWriter)
@@ -250,13 +521,8 @@ class TestHTTPCONNECT:
         writer.write = MagicMock()
         writer.drain = AsyncMock()
 
-        await client._handle_http_connect(
-            reader, writer, b"GET / HTTP/1.1\r\n"
-        )
-        # Should send 400 Bad Request
-        writer.write.assert_called_once()
-        call_args = writer.write.call_args[0][0]
-        assert b"400" in call_args
+        await client._handle_http(reader, writer, b"BAD\r\n")
+        writer.write.assert_called_once_with(b"HTTP/1.1 400 Bad Request\r\n\r\n")
 
 
 class TestMopsClient:
@@ -276,7 +542,7 @@ class TestMopsClient:
             mock_socks5.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_handle_proxy_http(self):
+    async def test_handle_proxy_http_connect(self):
         client = MopsClient(listen_port=10081)
         reader = AsyncMock(spec=asyncio.StreamReader)
         reader.read = AsyncMock(return_value=b"C")
@@ -285,7 +551,21 @@ class TestMopsClient:
         writer.close = MagicMock()
         writer.wait_closed = AsyncMock()
 
-        with patch.object(client, "_handle_http_connect", new_callable=AsyncMock) as mock_http:
+        with patch.object(client, "_handle_http", new_callable=AsyncMock) as mock_http:
+            await client.handle_proxy(reader, writer)
+            mock_http.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_proxy_http_get(self):
+        client = MopsClient(listen_port=10081)
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        reader.read = AsyncMock(return_value=b"G")
+        reader.readline = AsyncMock(return_value=b"ET http://example.com/ HTTP/1.1\r\n")
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+
+        with patch.object(client, "_handle_http", new_callable=AsyncMock) as mock_http:
             await client.handle_proxy(reader, writer)
             mock_http.assert_called_once()
 

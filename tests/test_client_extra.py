@@ -112,16 +112,14 @@ class TestHTTPConnectEdgeCases:
         reader.readline = mock_readline
 
         with patch("mops.client.MopsClient._connect_and_tunnel", new_callable=AsyncMock) as mock_connect:
-            await client._handle_http_connect(
-                reader, writer, b"CONNECT example.com HTTP/1.1\r\n"
-            )
+            await client._handle_http_connect(reader, writer, "example.com")
             mock_connect.assert_called_once()
             args = mock_connect.call_args
             assert args[0][2] == "example.com"
             assert args[0][3] == 443  # default port
 
     @pytest.mark.asyncio
-    async def test_http_connect_non_connect_method(self):
+    async def test_http_connect_full_url(self):
         client = MopsClient(listen_port=10081)
         reader = AsyncMock(spec=asyncio.StreamReader)
         writer = AsyncMock(spec=asyncio.StreamWriter)
@@ -130,12 +128,24 @@ class TestHTTPConnectEdgeCases:
         writer.write = MagicMock()
         writer.drain = AsyncMock()
 
-        await client._handle_http_connect(
-            reader, writer, b"GET / HTTP/1.1\r\n"
-        )
-        # Should send 400
-        call_args = writer.write.call_args[0][0]
-        assert b"400" in call_args
+        header_lines = [b"\r\n"]
+        line_idx = 0
+        async def mock_readline():
+            nonlocal line_idx
+            if line_idx < len(header_lines):
+                result = header_lines[line_idx]
+                line_idx += 1
+                return result
+            return b""
+
+        reader.readline = mock_readline
+
+        with patch("mops.client.MopsClient._connect_and_tunnel", new_callable=AsyncMock) as mock_connect:
+            await client._handle_http_connect(reader, writer, "example.com:443")
+            mock_connect.assert_called_once()
+            args = mock_connect.call_args
+            assert args[0][2] == "example.com"
+            assert args[0][3] == 443
 
 
 class TestConnectAndTunnel:

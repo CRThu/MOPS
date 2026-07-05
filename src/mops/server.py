@@ -137,10 +137,9 @@ class MopsServer:
             target_reader, target_writer = await asyncio.open_connection(host, port)
             connected = True
 
-            node_name = f"{host}:{port}"
             await tunnel(
                 reader, writer, target_reader, target_writer,
-                stats=self._stats, node_name=node_name,
+                stats=self._stats, node_name=f"server:{self.port}",
             )
         except (ConnectionError, OSError) as e:
             logger.debug(f"Connection error: {e}")
@@ -150,7 +149,10 @@ class MopsServer:
             logger.error(f"Unexpected error in handle_client: {e}")
         finally:
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            except RuntimeError:
+                pass
 
     async def run(self) -> None:
         """Start the server and mDNS broadcast."""
