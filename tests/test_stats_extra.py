@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from mops.stats import NodeRecord, NodeRegistry, TrafficHistory
+from mops.stats import ConnectionTracker, NodeRecord, NodeRegistry, TrafficHistory, TrafficStats
 
 
 class TestNodeRegistry:
@@ -103,3 +103,33 @@ class TestTrafficHistory:
         h.record(100, 200, 1)
         h.record(100, 200, 1)  # same values
         assert h.compute_speed() == (0, 0)
+
+
+class TestTrafficStats:
+    def test_update_node_fails_existing(self):
+        stats = TrafficStats()
+        stats.record_upload("10.0.0.1:80", 100)
+        stats.update_node_fails("10.0.0.1:80", 5)
+        node = stats.get_node_stats("10.0.0.1:80")
+        assert node.fails == 5
+
+    def test_update_node_fails_nonexistent(self):
+        stats = TrafficStats()
+        stats.update_node_fails("nonexistent:80", 5)
+        assert stats.get_node_stats("nonexistent:80") is None
+
+
+class TestConnectionTrackerExtra:
+    def test_prune_old_completed(self):
+        tracker = ConnectionTracker(history_minutes=0)
+        conn_id = tracker.start("10.0.0.1", "example.com", 80)
+        time.sleep(0.01)
+        tracker.end(conn_id)
+        # With history_minutes=0, prune in end() removes completed
+        # Then get_connections() calls prune() again — both empty
+        conns = tracker.get_connections()
+        assert len(conns) == 0
+
+    def test_end_nonexistent_conn(self):
+        tracker = ConnectionTracker()
+        tracker.end("nonexistent")  # should not crash

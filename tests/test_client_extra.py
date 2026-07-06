@@ -353,3 +353,76 @@ class TestConnectAndTunnelWithStats:
             # Should have written tunnel header
             server_writer.write.assert_called()
 
+
+class TestClientStop:
+    @pytest.mark.asyncio
+    async def test_stop(self):
+        client = MopsClient(listen_port=10081)
+        client._discovery = MagicMock()
+        client._server = AsyncMock()
+        await client.stop()
+        client._discovery.stop.assert_called_once()
+        client._server.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_without_server(self):
+        client = MopsClient(listen_port=10081)
+        client._discovery = MagicMock()
+        client._server = None
+        await client.stop()
+        client._discovery.stop.assert_called_once()
+
+
+class TestSOCKS5UnsupportedCmd:
+    @pytest.mark.asyncio
+    async def test_socks5_bind_command(self):
+        client = MopsClient(listen_port=10081)
+        client._scheduler.add_node(NodeInfo(ip="10.0.0.1", port=10080))
+
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+
+        chunks = [
+            b"\x01",  # NMETHODS
+            b"\x00",  # METHOD
+            b"\x05\x02\x00\x01",  # VER=5 CMD=2(BIND) RSV=0 ATYP=1
+            bytes([1, 2, 3, 4]),
+            struct.pack("!H", 80),
+        ]
+        call_count = 0
+
+        async def mock_readexactly(n):
+            nonlocal call_count
+            result = chunks[call_count]
+            call_count += 1
+            return result
+
+        reader.readexactly = mock_readexactly
+        await client._handle_socks5(reader, writer, b"\x05")
+        writer.write.assert_called()
+
+
+class TestConnectAndTunnelOSError:
+    @pytest.mark.asyncio
+    async def test_connect_and_tunnel_os_error(self):
+        from mops.stats import TrafficStats
+        client = MopsClient(listen_port=10081, stats=TrafficStats())
+        client._scheduler.add_node(NodeInfo(ip="10.0.0.1", port=10080))
+
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+
+        with patch("asyncio.open_connection", side_effect=OSError("network")):
+            await client._connect_and_tunnel(reader, writer, "example.com", 443)
+
+        node = client._scheduler.get_node_by_key("10.0.0.1:10080")
+        assert node.fails >= 1
+

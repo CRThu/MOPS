@@ -163,3 +163,50 @@ class TestProxyIntegration:
              patch("mops.__main__.cmd_proxy_status") as mock_cmd:
             main()
             mock_cmd.assert_called_once()
+
+
+class TestCmdDashboard:
+    def test_cmd_dashboard(self):
+        from mops.__main__ import cmd_dashboard
+        with patch("mops.dashboard.MopsDashboard") as mock_cls:
+            mock_inst = AsyncMock()
+            mock_cls.return_value = mock_inst
+            with patch("mops.__main__.asyncio.run") as mock_run:
+                cmd_dashboard(Namespace(port=10082, service=False))
+                mock_cls.assert_called_once_with(port=10082)
+                mock_run.assert_called_once()
+
+
+class TestServiceConfigLoading:
+    def test_main_service_mode_loads_config(self):
+        with patch("sys.argv", ["mops", "run", "--service"]), \
+             patch("mops.service._load_config", return_value={
+                 "mode": "server", "port": 10090, "strategy": "hash", "bind": "1.2.3.4"
+             }), \
+             patch("mops.__main__._run_server") as mock_run:
+            main()
+            mock_run.assert_called_once()
+            # _run_server(base_port, weight, bind) - positional args
+            args, kwargs = mock_run.call_args
+            assert args[0] == 10090  # base_port
+            assert args[2] == "1.2.3.4"  # bind
+
+    def test_main_service_no_action_shows_help(self):
+        with patch("sys.argv", ["mops", "service"]), \
+             patch("mops.__main__.build_parser") as mock_build:
+            mock_parser = MagicMock()
+            mock_build.return_value = mock_parser
+            mock_args = Namespace(command="service", service_action=None, service=False)
+            mock_parser.parse_args.return_value = mock_args
+            with pytest.raises(SystemExit):
+                main()
+
+    def test_main_proxy_no_action_shows_help(self):
+        with patch("sys.argv", ["mops", "proxy"]), \
+             patch("mops.__main__.build_parser") as mock_build:
+            mock_parser = MagicMock()
+            mock_build.return_value = mock_parser
+            mock_args = Namespace(command="proxy", proxy_action=None, service=False)
+            mock_parser.parse_args.return_value = mock_args
+            with pytest.raises(SystemExit):
+                main()

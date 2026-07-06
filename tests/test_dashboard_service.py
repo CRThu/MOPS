@@ -122,3 +122,87 @@ class TestMopsDashboard:
         status = self.dashboard._build_status()
         assert status["speed_up"] > 0
         assert status["speed_down"] > 0
+
+    @pytest.mark.asyncio
+    async def test_stop_with_discovery_and_runner(self):
+        self.dashboard._discovery = MagicMock()
+        self.dashboard._runner = AsyncMock()
+        await self.dashboard.stop()
+        self.dashboard._discovery.stop.assert_called_once()
+        self.dashboard._runner.cleanup.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_without_resources(self):
+        self.dashboard._discovery = None
+        self.dashboard._runner = None
+        await self.dashboard.stop()
+
+    @pytest.mark.asyncio
+    async def test_query_success(self):
+        node = NodeInfo(ip="192.168.1.1", port=10080, api_port=10082)
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(return_value={
+            "total_up": 500, "total_down": 1000, "active_conns": 3,
+        })
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=mock_response)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("mops.dashboard.aiohttp.ClientSession", return_value=mock_session):
+            await self.dashboard._query(node)
+
+        assert "192.168.1.1:10080" in self.dashboard._cache
+        assert self.dashboard._cache["192.168.1.1:10080"]["total_up"] == 500
+
+    @pytest.mark.asyncio
+    async def test_query_failure_keeps_stale(self):
+        node = NodeInfo(ip="192.168.1.1", port=10080, api_port=10082)
+        self.dashboard._cache["192.168.1.1:10080"] = {"total_up": 100}
+
+        with patch("mops.dashboard.aiohttp.ClientSession", side_effect=ConnectionError("refused")):
+            await self.dashboard._query(node)
+
+        assert self.dashboard._cache["192.168.1.1:10080"]["total_up"] == 100
+
+    @pytest.mark.asyncio
+    async def test_poll_iteration_with_nodes(self):
+        self.dashboard._scheduler.add_node(
+            NodeInfo(ip="10.0.0.1", port=10080, api_port=10082)
+        )
+        self.dashboard._cache["10.0.0.1:10080"] = {
+            "total_up": 100, "total_down": 200, "active_conns": 5,
+        }
+        with patch.object(self.dashboard, "_query", new_callable=AsyncMock):
+            await self.dashboard._poll_loop_iteration()
+        assert len(self.dashboard._history._samples) == 1
+
+    @pytest.mark.asyncio
+    async def test_handle_dashboard_fallback(self):
+        app = web.Application()
+        app.router.add_get("/", self.dashboard._handle_dashboard)
+        with patch("mops.dashboard._STATIC_DIR") as mock_dir:
+            mock_dir.__truediv__ = MagicMock(return_value=MagicMock(exists=MagicMock(return_value=False)))
+            async with TestClient(TestServer(app)) as client:
+                resp = await client.get("/")
+                assert resp.status == 200
+                text = await resp.text()
+                assert "MOPS Dashboard" in text
+
+    @pytest.mark.asyncio
+    async def test_poll_loop_iteration_with_connections(self):
+        self.dashboard._scheduler.add_node(
+            NodeInfo(ip="10.0.0.1", port=10080, api_port=10082)
+        )
+        self.dashboard._cache["10.0.0.1:10080"] = {
+            "total_up": 100, "total_down": 200, "active_conns": 5,
+            "connections": [{"conn_id": "1"}],
+        }
+        with patch.object(self.dashboard, "_query", new_callable=AsyncMock):
+            await self.dashboard._poll_loop_iteration()
+        status = self.dashboard._build_status()
+        assert len(status["connections"]) == 1

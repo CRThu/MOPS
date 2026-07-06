@@ -82,6 +82,49 @@ class TestMopsServer:
             await server.handle_client(reader, writer)
             mock_tunnel.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_handle_client_incomplete_read(self):
+        from mops.stats import ConnectionTracker
+        server = MopsServer(port=10080, conn_tracker=ConnectionTracker())
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        reader.readline = AsyncMock(return_value=b"example.com:80\n")
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+
+        with patch("asyncio.open_connection", side_effect=asyncio.IncompleteReadError(b"", 10)):
+            await server.handle_client(reader, writer)
+        writer.close.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_handle_client_unexpected_error(self):
+        server = MopsServer(port=10080)
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        reader.readline = AsyncMock(return_value=b"example.com:80\n")
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+
+        with patch("asyncio.open_connection", side_effect=RuntimeError("unexpected")):
+            await server.handle_client(reader, writer)
+        writer.close.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_handle_client_wait_closed_runtime_error(self):
+        server = MopsServer(port=10080)
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        reader.readline = AsyncMock(return_value=b"example.com:80\n")
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock(side_effect=RuntimeError("already closed"))
+
+        with patch("asyncio.open_connection", side_effect=ConnectionError("refused")):
+            await server.handle_client(reader, writer)
+        writer.close.assert_called()
+
 
 class TestMdnsBroadcaster:
     """Test mDNS registration/unregistration."""
