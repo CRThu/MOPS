@@ -15,6 +15,16 @@
 - **REST API** — 实时查看节点状态、流量统计、连接信息
 - **Web Dashboard** — AntV G6 拓扑图 + 暗色科技感界面，15s 自动刷新
 
+## 安装
+
+```bash
+# pip
+pip install carrot-mops
+
+# uv
+uv tool install carrot-mops
+```
+
 ## 快速开始
 
 ```bash
