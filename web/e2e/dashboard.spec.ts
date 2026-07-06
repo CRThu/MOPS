@@ -3,85 +3,75 @@ import { mockStatusEmpty, mockStatusWithServers } from './fixtures/mock-data'
 
 test.describe('Dashboard', () => {
   test('loads with correct title and stats bar', async ({ page }) => {
-    await page.route('**/api/server', (route) =>
+    await page.route('**/api/dashboard', (route) =>
       route.fulfill({ json: mockStatusEmpty })
     )
     await page.goto('/')
 
     await expect(page).toHaveTitle('MOPS Dashboard')
     await expect(page.locator('.stats-bar')).toBeVisible()
-    await expect(page.locator('#s-up')).toHaveText('0 B')
-    await expect(page.locator('#s-down')).toHaveText('0 B')
+    await expect(page.locator('#stat-traffic')).toHaveText('0 B ↑ 0 B ↓')
+    await expect(page.locator('#stat-speed')).toHaveText('0 B/s ↑ 0 B/s ↓')
   })
 
   test('renders topology panel with mock data', async ({ page }) => {
-    await page.route('**/api/server', (route) =>
+    await page.route('**/api/dashboard', (route) =>
       route.fulfill({ json: mockStatusWithServers })
     )
     await page.goto('/')
 
     // Verify topology panel is present and visible
-    const panel = page.locator('.topology-panel')
+    const panel = page.locator('.topo-panel')
     await expect(panel).toBeVisible()
-    await expect(panel.locator('.panel-header')).toHaveText('Network Topology')
 
     // Container exists (G6 renders into it)
     await expect(page.locator('#topo-container')).toBeVisible()
   })
 
-  test('renders connection list', async ({ page }) => {
-    await page.route('**/api/server', (route) =>
+  test('renders server cards', async ({ page }) => {
+    await page.route('**/api/dashboard', (route) =>
       route.fulfill({ json: mockStatusWithServers })
     )
     await page.goto('/')
 
-    // Connection count badge should show 2
-    await expect(page.locator('#conn-count')).toHaveText('2')
+    // Wait for poll cycle to complete
+    await expect(page.locator('#cards-count')).toHaveText('2', { timeout: 10000 })
 
-    // Should have connection cards
-    const cards = page.locator('.conn-card')
+    // Should have server cards
+    const cards = page.locator('.server-card')
     await expect(cards).toHaveCount(2)
 
     // First card should be active (sorted active first)
-    await expect(cards.first().locator('.conn-status')).toHaveText('active')
+    await expect(cards.first().locator('.card-status')).toHaveText('ACTIVE')
   })
 
-  test('renders traffic table', async ({ page }) => {
-    await page.route('**/api/server', (route) =>
-      route.fulfill({ json: mockStatusWithServers })
-    )
-    await page.goto('/')
-
-    const table = page.locator('#traffic-table')
-    await expect(table.locator('table')).toBeVisible()
-
-    // Should have 2 server rows
-    const rows = table.locator('tbody tr')
-    await expect(rows).toHaveCount(2)
-
-    // Total row should show combined traffic
-    await expect(table.locator('.tr-total')).toContainText('Total')
-  })
-
-  test('shows empty state when no connections', async ({ page }) => {
-    await page.route('**/api/server', (route) =>
+  test('shows empty state when no servers', async ({ page }) => {
+    await page.route('**/api/dashboard', (route) =>
       route.fulfill({ json: mockStatusEmpty })
     )
     await page.goto('/')
 
-    await expect(page.locator('#conn-list')).toContainText('Waiting for connections…')
-    await expect(page.locator('#traffic-table')).toContainText('No traffic yet')
+    await expect(page.locator('#cards-list')).toContainText('Discovering servers...')
   })
 
   test('updates stats from API response', async ({ page }) => {
-    await page.route('**/api/server', (route) =>
+    await page.route('**/api/dashboard', (route) =>
       route.fulfill({ json: mockStatusWithServers })
     )
     await page.goto('/')
 
-    await expect(page.locator('#s-up')).toContainText('MB')
-    await expect(page.locator('#s-down')).toContainText('MB')
-    await expect(page.locator('#s-active')).toHaveText('2')
-    await expect(page.locator('#s-total')).toHaveText('2')
+    await expect(page.locator('#stat-traffic')).toContainText('MB')
+    await expect(page.locator('#stat-speed')).toContainText('B/s')
+    await expect(page.locator('#stat-conns')).toHaveText('2')
+  })
+
+  test('renders header with uptime', async ({ page }) => {
+    await page.route('**/api/dashboard', (route) =>
+      route.fulfill({ json: mockStatusWithServers })
+    )
+    await page.goto('/')
+
+    await expect(page.locator('#hdr-uptime')).toContainText('1d 0m')
+    await expect(page.locator('#hdr-status')).toContainText('LIVE')
   })
 })

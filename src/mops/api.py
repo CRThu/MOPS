@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -10,7 +11,7 @@ from aiohttp import web
 from loguru import logger
 
 if TYPE_CHECKING:
-    from .stats import ConnectionTracker, TrafficStats
+    from .stats import ConnectionTracker, TrafficHistory, TrafficStats
 
 _STATIC_DIR = Path(__file__).parent / "static"
 _DASHBOARD_HTML_PATH = Path(__file__).parent / "dashboard.html"
@@ -22,7 +23,7 @@ class MopsApi:
     def __init__(
         self,
         port: int,
-        host: str = "127.0.0.1",
+        host: str = "0.0.0.0",
         server_stats: TrafficStats | None = None,
         client_stats: TrafficStats | None = None,
         mode: str = "both",
@@ -32,6 +33,7 @@ class MopsApi:
         client_listen: str = "127.0.0.1",
         client_port: int = 10081,
         conn_tracker: ConnectionTracker | None = None,
+        traffic_history: TrafficHistory | None = None,
     ) -> None:
         self.port = port
         self.host = host
@@ -44,23 +46,43 @@ class MopsApi:
         self._client_listen = client_listen
         self._client_port = client_port
         self._conn_tracker = conn_tracker
+        self._traffic_history = traffic_history
         self._runner: web.AppRunner | None = None
         self._start_time = time.monotonic()
 
     def _snapshot(self, stats: TrafficStats) -> dict:
+        hostname = socket.gethostname()
         nodes = []
         for name, ns in stats.get_all_nodes().items():
-            nodes.append({
-                "ip": ns.ip,
-                "port": ns.port,
-                "fails": ns.fails,
-                "up": ns.up,
-                "down": ns.down,
-            })
+            if ns.ip == "server":
+                nodes.append({
+                    "ip": ns.ip,
+                    "port": ns.port,
+                    "hostname": hostname,
+                    "fails": ns.fails,
+                    "status": "active",
+                    "up": ns.up,
+                    "down": ns.down,
+                })
+            else:
+                nodes.append({
+                    "ip": ns.ip,
+                    "port": ns.port,
+                    "hostname": ns.ip,
+                    "fails": ns.fails,
+                    "status": "active",
+                    "up": ns.up,
+                    "down": ns.down,
+                })
+        speed_up, speed_down = (0, 0)
+        if self._traffic_history:
+            speed_up, speed_down = self._traffic_history.compute_speed()
         return {
             "nodes": nodes,
             "total_up": stats.get_total_up(),
             "total_down": stats.get_total_down(),
+            "speed_up": speed_up,
+            "speed_down": speed_down,
             "active_conns": stats.active_conns,
             "uptime": time.monotonic() - self._start_time,
         }
@@ -98,6 +120,7 @@ class MopsApi:
         app = web.Application()
         app.router.add_get("/", self._handle_dashboard)
         app.router.add_get("/api/server", self._handle_server_status)
+        app.router.add_get("/api/dashboard", self._handle_server_status)
 
         # Serve built frontend assets at root (dashboard.js, dashboard.css)
         if _STATIC_DIR.is_dir():

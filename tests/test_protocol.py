@@ -6,7 +6,9 @@ from mops.protocol import (
     MDNS_TTL,
     MAX_FAILS,
     MOPS_SERVICE_TYPE,
+    NODE_HISTORY_TTL,
     RECOVERY_INTERVAL,
+    SPEED_WINDOW,
     STRATEGY_HASH,
     STRATEGY_RANDOM,
 )
@@ -21,3 +23,5 @@ def test_constants_values():
     assert MOPS_SERVICE_TYPE == "_mops-proxy._tcp.local."
     assert STRATEGY_RANDOM == "random"
     assert STRATEGY_HASH == "hash"
+    assert NODE_HISTORY_TTL == 3600
+    assert SPEED_WINDOW == 5

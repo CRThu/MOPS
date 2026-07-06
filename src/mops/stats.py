@@ -8,6 +8,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from .protocol import NODE_HISTORY_TTL, SPEED_WINDOW
+
 
 @dataclass
 class NodeStats:
@@ -191,3 +193,84 @@ class ConnectionTracker:
         cutoff = time.monotonic() - self._history_minutes * 60
         while self._completed and self._completed[0].ended_at is not None and self._completed[0].ended_at < cutoff:
             self._completed.popleft()
+
+
+@dataclass
+class NodeRecord:
+    ip: str
+    port: int
+    api_port: int
+    hostname: str
+    first_seen: float
+    last_seen: float
+
+
+class NodeRegistry:
+    """Track all discovered nodes, retain offline nodes for TTL duration."""
+
+    def __init__(self, ttl: int = NODE_HISTORY_TTL) -> None:
+        self._nodes: dict[str, NodeRecord] = {}
+        self._ttl = ttl
+        self._lock = threading.Lock()
+
+    def record_seen(self, ip: str, port: int, api_port: int, hostname: str) -> None:
+        key = f"{ip}:{port}"
+        now = time.monotonic()
+        with self._lock:
+            if key in self._nodes:
+                self._nodes[key].last_seen = now
+                self._nodes[key].api_port = api_port
+                self._nodes[key].hostname = hostname
+            else:
+                self._nodes[key] = NodeRecord(
+                    ip=ip, port=port, api_port=api_port,
+                    hostname=hostname, first_seen=now, last_seen=now,
+                )
+
+    def mark_offline(self, ip: str, port: int) -> None:
+        key = f"{ip}:{port}"
+        with self._lock:
+            if key in self._nodes:
+                self._nodes[key].last_seen = 0  # mark as offline
+
+    def get_all(self) -> dict[str, NodeRecord]:
+        with self._lock:
+            return dict(self._nodes)
+
+    def prune(self) -> None:
+        now = time.monotonic()
+        with self._lock:
+            expired = [
+                k for k, v in self._nodes.items()
+                if v.last_seen == 0 and (now - v.first_seen) > self._ttl
+            ]
+            for k in expired:
+                del self._nodes[k]
+
+
+class TrafficHistory:
+    """Ring buffer for computing real-time speed from total counters."""
+
+    def __init__(self, capacity: int = SPEED_WINDOW) -> None:
+        self._samples: deque = deque(maxlen=capacity)
+
+    def record(self, total_up: int, total_down: int, active_conns: int) -> None:
+        self._samples.append({
+            "t": time.monotonic(),
+            "up": total_up,
+            "down": total_down,
+            "conns": active_conns,
+        })
+
+    def compute_speed(self) -> tuple[int, int]:
+        """Return (speed_up, speed_down) in bytes/sec."""
+        if len(self._samples) < 2:
+            return (0, 0)
+        a, b = self._samples[-2], self._samples[-1]
+        dt = b["t"] - a["t"]
+        if dt <= 0:
+            return (0, 0)
+        return (
+            int((b["up"] - a["up"]) / dt),
+            int((b["down"] - a["down"]) / dt),
+        )

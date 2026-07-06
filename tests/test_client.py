@@ -87,9 +87,9 @@ class TestScheduler:
 
     def test_remove_by_name(self):
         sched = Scheduler()
-        node = NodeInfo(ip="10.0.0.1", port=10080, name="mops-server-1._mops-proxy._tcp.local.")
+        node = NodeInfo(ip="10.0.0.1", port=10080, name="mops-server-1-10080._mops-proxy._tcp.local.")
         sched.add_node(node)
-        sched.remove_by_name("mops-server-1._mops-proxy._tcp.local.")
+        sched.remove_by_name("mops-server-1-10080._mops-proxy._tcp.local.")
         assert len(sched.get_all_nodes()) == 0
 
 

@@ -1,14 +1,19 @@
 import { describe, it, expect } from 'vitest'
-import { toTopo, type ServerStatus } from './main'
+import { toTopo } from './data'
+import type { DashboardStatus } from './types'
 
-function makeStatus(overrides: Partial<ServerStatus> = {}): ServerStatus {
+function makeStatus(overrides: Partial<DashboardStatus> = {}): DashboardStatus {
   return {
     nodes: [],
+    connections: [],
     total_up: 0,
     total_down: 0,
+    speed_up: 0,
+    speed_down: 0,
     active_conns: 0,
-    connections: [],
     uptime: 0,
+    mode: 'dashboard',
+    strategy: 'mDNS',
     ...overrides,
   }
 }
@@ -27,23 +32,11 @@ describe('toTopo', () => {
     expect(serverNodes[0].id).toBe('srv-0')
   })
 
-  it('filters out server self-referencing stats', () => {
-    const topo = toTopo(makeStatus({
-      nodes: [
-        { ip: '10.0.0.1', port: 10080, fails: 0, up: 100, down: 200 },
-        { ip: 'server', port: 10080, fails: 0, up: 50, down: 50 },
-      ],
-    }))
-    const serverNodes = topo.nodes.filter((n) => n.type === 'server')
-    expect(serverNodes).toHaveLength(1)
-    expect(serverNodes[0].id).toContain('10.0.0.1')
-  })
-
   it('creates server nodes with correct IDs', () => {
     const topo = toTopo(makeStatus({
       nodes: [
-        { ip: '10.0.0.1', port: 10080, fails: 0, up: 100, down: 200 },
-        { ip: '10.0.0.2', port: 10080, fails: 0, up: 50, down: 50 },
+        { ip: '10.0.0.1', port: 10080, hostname: 'server-a', fails: 0, status: 'active', total_up: 100, total_down: 200, active_conns: 1, connections: [], speed_up: 0, speed_down: 0 },
+        { ip: '10.0.0.2', port: 10080, hostname: 'server-b', fails: 0, status: 'active', total_up: 50, total_down: 50, active_conns: 0, connections: [], speed_up: 0, speed_down: 0 },
       ],
     }))
     const serverNodes = topo.nodes.filter((n) => n.type === 'server')
@@ -52,93 +45,94 @@ describe('toTopo', () => {
     expect(serverNodes[1].id).toBe('srv-10.0.0.2:10080')
   })
 
-  it('creates one client node per unique client_ip', () => {
+  it('creates single Client node when no connections', () => {
     const topo = toTopo(makeStatus({
       nodes: [
-        { ip: '10.0.0.1', port: 10080, fails: 0, up: 100, down: 200 },
-      ],
-      connections: [
-        { conn_id: '1', client_ip: '192.168.1.10', target_host: 'example.com', target_port: 443, status: 'active', started_at: 1000 },
-        { conn_id: '2', client_ip: '192.168.1.10', target_host: 'api.github.com', target_port: 443, status: 'active', started_at: 1000 },
-        { conn_id: '3', client_ip: '192.168.1.20', target_host: 'example.com', target_port: 443, status: 'completed', started_at: 1000 },
+        { ip: '10.0.0.1', port: 10080, hostname: 'server-a', fails: 0, status: 'active', total_up: 100, total_down: 200, active_conns: 1, connections: [], speed_up: 0, speed_down: 0 },
       ],
     }))
-    const clientNodes = topo.nodes.filter((n) => n.type === 'client' || n.type === 'client-offline')
+    const clientNodes = topo.nodes.filter((n) => n.type === 'client')
+    expect(clientNodes).toHaveLength(1)
+    expect(clientNodes[0].id).toBe('cli-local')
+  })
+
+  it('creates multiple Client nodes from connections', () => {
+    const topo = toTopo(makeStatus({
+      nodes: [
+        { ip: '10.0.0.1', port: 10080, hostname: 'server-a', fails: 0, status: 'active', total_up: 100, total_down: 200, active_conns: 2, connections: [], speed_up: 0, speed_down: 0 },
+      ],
+      connections: [
+        { conn_id: 'c1', client_ip: '192.168.1.10', target_host: 'example.com', target_port: 443, status: 'active', started_at: 100, server_node: '10.0.0.1:10080' },
+        { conn_id: 'c2', client_ip: '192.168.1.20', target_host: 'github.com', target_port: 443, status: 'active', started_at: 100, server_node: '10.0.0.1:10080' },
+      ],
+    }))
+    const clientNodes = topo.nodes.filter((n) => n.type === 'client')
     expect(clientNodes).toHaveLength(2)
-    expect(clientNodes.find((n) => n.id === 'cli-192.168.1.10')).toBeDefined()
-    expect(clientNodes.find((n) => n.id === 'cli-192.168.1.20')).toBeDefined()
+    expect(clientNodes.map(n => n.id).sort()).toEqual(['cli-192.168.1.10', 'cli-192.168.1.20'])
   })
 
-  it('marks active client with client type', () => {
-    const topo = toTopo(makeStatus({
-      nodes: [{ ip: '10.0.0.1', port: 10080, fails: 0, up: 100, down: 200 }],
-      connections: [
-        { conn_id: '1', client_ip: '192.168.1.10', target_host: '10.0.0.1', target_port: 443, status: 'active', started_at: 1000 },
-      ],
-    }))
-    const cli = topo.nodes.find((n) => n.id === 'cli-192.168.1.10')
-    expect(cli?.type).toBe('client')
-  })
-
-  it('marks offline client with client-offline type', () => {
-    const topo = toTopo(makeStatus({
-      nodes: [{ ip: '10.0.0.1', port: 10080, fails: 0, up: 100, down: 200 }],
-      connections: [
-        { conn_id: '1', client_ip: '192.168.1.10', target_host: '10.0.0.1', target_port: 443, status: 'completed', started_at: 1000, ended_at: 2000 },
-      ],
-    }))
-    const cli = topo.nodes.find((n) => n.id === 'cli-192.168.1.10')
-    expect(cli?.type).toBe('client-offline')
-  })
-
-  it('creates edges App → each Client', () => {
-    const topo = toTopo(makeStatus({
-      nodes: [{ ip: '10.0.0.1', port: 10080, fails: 0, up: 100, down: 200 }],
-      connections: [
-        { conn_id: '1', client_ip: '192.168.1.10', target_host: 'example.com', target_port: 443, status: 'active', started_at: 1000 },
-        { conn_id: '2', client_ip: '192.168.1.20', target_host: 'example.com', target_port: 443, status: 'active', started_at: 1000 },
-      ],
-    }))
-    const appToCli = topo.edges.filter(
-      (e) => e.source === 'app' && e.target.startsWith('cli-')
-    )
-    expect(appToCli).toHaveLength(2)
-  })
-
-  it('creates edges Client → Server it talked to', () => {
+  it('creates edges from each client to its connected servers', () => {
     const topo = toTopo(makeStatus({
       nodes: [
-        { ip: '10.0.0.1', port: 10080, fails: 0, up: 100, down: 200 },
-        { ip: '10.0.0.2', port: 10080, fails: 0, up: 50, down: 50 },
+        { ip: '10.0.0.1', port: 10080, hostname: 'server-a', fails: 0, status: 'active', total_up: 100, total_down: 200, active_conns: 3, connections: [], speed_up: 0, speed_down: 0 },
+        { ip: '10.0.0.2', port: 10080, hostname: 'server-b', fails: 0, status: 'active', total_up: 50, total_down: 50, active_conns: 1, connections: [], speed_up: 0, speed_down: 0 },
       ],
       connections: [
-        { conn_id: '1', client_ip: '192.168.1.10', target_host: '10.0.0.1', target_port: 443, status: 'active', started_at: 1000 },
+        // Client A connects to server-a
+        { conn_id: 'c1', client_ip: '192.168.1.10', target_host: 'example.com', target_port: 443, status: 'active', started_at: 100, server_node: '10.0.0.1:10080' },
+        // Client B connects to both servers
+        { conn_id: 'c2', client_ip: '192.168.1.20', target_host: 'github.com', target_port: 443, status: 'active', started_at: 100, server_node: '10.0.0.1:10080' },
+        { conn_id: 'c3', client_ip: '192.168.1.20', target_host: 'api.openai.com', target_port: 443, status: 'active', started_at: 100, server_node: '10.0.0.2:10080' },
       ],
     }))
-    const cliToSrv = topo.edges.filter(
-      (e) => e.source === 'cli-192.168.1.10' && e.target.startsWith('srv-')
-    )
+
+    // App → 2 Clients
+    const appEdges = topo.edges.filter(e => e.source === 'app' && e.target.startsWith('cli-'))
+    expect(appEdges).toHaveLength(2)
+
+    // Client A → server-a only
+    const cliAEdges = topo.edges.filter(e => e.source === 'cli-192.168.1.10' && e.target.startsWith('srv-'))
+    expect(cliAEdges).toHaveLength(1)
+    expect(cliAEdges[0].target).toBe('srv-10.0.0.1:10080')
+
+    // Client B → both servers
+    const cliBEdges = topo.edges.filter(e => e.source === 'cli-192.168.1.20' && e.target.startsWith('srv-'))
+    expect(cliBEdges).toHaveLength(2)
+  })
+
+  it('creates edges App → Client → Server → Internet', () => {
+    const topo = toTopo(makeStatus({
+      nodes: [
+        { ip: '10.0.0.1', port: 10080, hostname: 'server-a', fails: 0, status: 'active', total_up: 100, total_down: 200, active_conns: 1, connections: [], speed_up: 0, speed_down: 0 },
+      ],
+    }))
+    // App → Client
+    const appToCli = topo.edges.filter(e => e.source === 'app' && e.target === 'cli-local')
+    expect(appToCli).toHaveLength(1)
+    // Client → Server
+    const cliToSrv = topo.edges.filter(e => e.source === 'cli-local' && e.target.startsWith('srv-'))
     expect(cliToSrv).toHaveLength(1)
-    expect(cliToSrv[0].target).toBe('srv-10.0.0.1:10080')
-  })
-
-  it('creates App → Servers directly when no connections', () => {
-    const topo = toTopo(makeStatus({
-      nodes: [{ ip: '10.0.0.1', port: 10080, fails: 0, up: 100, down: 200 }],
-    }))
-    const appToSrv = topo.edges.filter(
-      (e) => e.source === 'app' && e.target.startsWith('srv-')
-    )
-    expect(appToSrv).toHaveLength(1)
-  })
-
-  it('creates Server → Internet edges', () => {
-    const topo = toTopo(makeStatus({
-      nodes: [{ ip: '10.0.0.1', port: 10080, fails: 0, up: 100, down: 200 }],
-    }))
-    const srvToInet = topo.edges.filter(
-      (e) => e.source.startsWith('srv-') && e.target === 'inet'
-    )
+    // Server → Internet
+    const srvToInet = topo.edges.filter(e => e.source.startsWith('srv-') && e.target === 'inet')
     expect(srvToInet).toHaveLength(1)
+  })
+
+  it('creates placeholder edges when no servers', () => {
+    const topo = toTopo(makeStatus())
+    const edges = topo.edges
+    // App → Client → srv-0 → Internet
+    expect(edges.length).toBe(3)
+  })
+
+  it('includes offline nodes', () => {
+    const topo = toTopo(makeStatus({
+      nodes: [
+        { ip: '10.0.0.1', port: 10080, hostname: 'server-a', fails: 0, status: 'active', total_up: 100, total_down: 200, active_conns: 1, connections: [], speed_up: 0, speed_down: 0 },
+        { ip: '10.0.0.2', port: 10080, hostname: 'server-b', fails: 0, status: 'offline', total_up: 0, total_down: 0, active_conns: 0, connections: [], speed_up: 0, speed_down: 0, last_seen: 1000 },
+      ],
+    }))
+    const offlineNodes = topo.nodes.filter(n => n.type === 'offline')
+    expect(offlineNodes).toHaveLength(1)
+    expect(offlineNodes[0].hostname).toBe('server-b')
   })
 })

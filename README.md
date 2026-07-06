@@ -287,7 +287,11 @@ MOPS/
 │       ├── main.ts       # 数据轮询 + 转换 + 渲染
 │       ├── graph.ts      # G6 拓扑图模块
 │       └── style.css     # 暗色主题样式
-├── tests/                # 181 个测试，88% 覆盖率
+│   └── e2e/              # Playwright E2E 渲染测试
+│       ├── dashboard.spec.ts    # 基础 Dashboard 测试 (6)
+│       ├── multi-node.spec.ts   # 多节点渲染测试 (13)
+│       └── fixtures/mock-data.ts # 测试数据
+├── tests/                # 202 个后端测试 + 25 个前端单元测试 + 19 个 E2E 渲染测试，85% 覆盖率
 ├── build.py              # Nuitka 打包脚本
 ├── pyproject.toml        # 项目配置 (hatchling)
 ├── .gitignore

@@ -35,14 +35,16 @@ def _setup_logger(service_mode: bool = False) -> None:
 def _run_server(base_port: int, weight: int, bind: str = "") -> None:
     from .api import MopsApi
     from .server import MopsServer
+    from .stats import TrafficHistory
 
     api_port = base_port + 2
     stats = TrafficStats()
     conn_tracker = ConnectionTracker()
+    traffic_history = TrafficHistory()
 
     async def _server():
         server = MopsServer(port=base_port, weight=weight, bind=bind, stats=stats, conn_tracker=conn_tracker)
-        api = MopsApi(port=api_port, server_stats=stats, mode="server", conn_tracker=conn_tracker)
+        api = MopsApi(port=api_port, server_stats=stats, mode="server", conn_tracker=conn_tracker, traffic_history=traffic_history)
 
         async def shutdown():
             await server.stop()
@@ -97,12 +99,14 @@ def _run_both(base_port: int, listen: str, strategy: str, weight: int, bind: str
     from .api import MopsApi
     from .client import MopsClient
     from .server import MopsServer
+    from .stats import TrafficHistory
 
     client_port = base_port + 1
     api_port = base_port + 2
     server_stats = TrafficStats()
     client_stats = TrafficStats()
     conn_tracker = ConnectionTracker()
+    traffic_history = TrafficHistory()
 
     async def _both():
         server = MopsServer(port=base_port, weight=weight, bind=bind, stats=server_stats, conn_tracker=conn_tracker)
@@ -120,6 +124,7 @@ def _run_both(base_port: int, listen: str, strategy: str, weight: int, bind: str
             client_listen=listen,
             client_port=client_port,
             conn_tracker=conn_tracker,
+            traffic_history=traffic_history,
         )
 
         async def shutdown():
@@ -221,6 +226,13 @@ def cmd_proxy_status(args: argparse.Namespace) -> None:
     print(json.dumps(proxy_status(), indent=2))
 
 
+def cmd_dashboard(args: argparse.Namespace) -> None:
+    _setup_logger(args.service)
+    from .dashboard import MopsDashboard
+    d = MopsDashboard(port=args.port)
+    asyncio.run(d.run())
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mops",
@@ -298,6 +310,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp_proxy_off.set_defaults(func=cmd_proxy_off)
     sp_proxy_stat = proxy_sub.add_parser("status", help="Show proxy status")
     sp_proxy_stat.set_defaults(func=cmd_proxy_status)
+
+    # dashboard - standalone dashboard
+    sp_dashboard = subparsers.add_parser("dashboard", help="Standalone dashboard (mDNS discovery)")
+    sp_dashboard.add_argument("--port", type=int, default=10082,
+                              help="Dashboard port (default: 10082)")
+    sp_dashboard.add_argument("--service", action="store_true",
+                              help=argparse.SUPPRESS)
+    sp_dashboard.set_defaults(func=cmd_dashboard)
 
     return parser
 

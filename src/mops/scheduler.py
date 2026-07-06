@@ -15,9 +15,11 @@ from .protocol import MAX_FAILS, RECOVERY_INTERVAL, STRATEGY_HASH, STRATEGY_RAND
 class NodeInfo:
     ip: str
     port: int
+    api_port: int = 0
     weight: int = 1
     fails: int = 0
     name: str = ""
+    hostname: str = ""
     _last_fail: float = 0.0
 
 

@@ -16,7 +16,7 @@ class TestNodeDiscovery:
     def test_add_service(self):
         zc = MagicMock()
         info = MagicMock()
-        info.name = "mops-server-1._mops-proxy._tcp.local."
+        info.name = "mops-server-1-10080._mops-proxy._tcp.local."
         info.port = 10080
         info.properties = {b"weight": b"2"}
         info.parsed_addresses.return_value = ["192.168.1.100"]
@@ -40,7 +40,7 @@ class TestNodeDiscovery:
     def test_add_service_no_weight(self):
         zc = MagicMock()
         info = MagicMock()
-        info.name = "mops-server-1._mops-proxy._tcp.local."
+        info.name = "mops-server-1-10080._mops-proxy._tcp.local."
         info.port = 10080
         info.properties = {}
         info.parsed_addresses.return_value = ["192.168.1.100"]
@@ -56,7 +56,7 @@ class TestNodeDiscovery:
         # First add a node
         zc = MagicMock()
         info = MagicMock()
-        info.name = "mops-server-1._mops-proxy._tcp.local."
+        info.name = "mops-server-1-10080._mops-proxy._tcp.local."
         info.port = 10080
         info.properties = {b"weight": b"1"}
         info.parsed_addresses.return_value = ["192.168.1.100"]
@@ -79,7 +79,7 @@ class TestNodeDiscovery:
     def test_update_service(self):
         zc = MagicMock()
         info = MagicMock()
-        info.name = "mops-server-1._mops-proxy._tcp.local."
+        info.name = "mops-server-1-10080._mops-proxy._tcp.local."
         info.port = 10080
         info.properties = {b"weight": b"1"}
         info.parsed_addresses.return_value = ["192.168.1.100"]

@@ -48,8 +48,8 @@ class TestDashboardHTML:
         async with TestClient(TestServer(app)) as client:
             resp = await client.get("/")
             html = await resp.text()
-            assert "conn-list" in html
-            assert "Connections" in html
+            assert "cards-list" in html
+            assert "Server Status" in html
 
     @pytest.mark.asyncio
     async def test_dashboard_has_stats_bar(self):

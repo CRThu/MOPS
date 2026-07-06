@@ -38,7 +38,7 @@ def mock_zeroconf():
 def mock_service_info():
     """Mock zeroconf.ServiceInfo."""
     info = MagicMock()
-    info.name = "mops-server-1._mops-proxy._tcp.local."
+    info.name = "mops-server-1-10080._mops-proxy._tcp.local."
     info.type = "_mops-proxy._tcp.local."
     info.port = 10080
     info.properties = {b"weight": b"1", b"version": b"0.1.0"}

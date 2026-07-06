@@ -29,7 +29,7 @@ class MdnsBroadcaster:
         import socket
 
         hostname = socket.gethostname()
-        service_name = f"mops-server-{hostname}.{MOPS_SERVICE_TYPE}"
+        service_name = f"mops-server-{hostname}-{port}.{MOPS_SERVICE_TYPE}"
 
         if bind:
             # User specified bind address
@@ -40,9 +40,11 @@ class MdnsBroadcaster:
 
         self._zc = Zeroconf()
 
+        api_port = port + 2
         properties = {
             b"weight": str(weight).encode(),
             b"version": b"0.1.0",
+            b"api_port": str(api_port).encode(),
         }
 
         self._service_info = ServiceInfo(
