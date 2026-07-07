@@ -1,6 +1,7 @@
 """Tests for MopsClient: SOCKS5, HTTP CONNECT, HTTP proxy, scheduling, circuit breaker."""
 
 import asyncio
+import json
 import struct
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,7 +9,9 @@ import pytest
 
 from mops.client import MopsClient
 from mops.scheduler import NoAvailableNodeError, NodeInfo, Scheduler
-from mops.protocol import STRATEGY_RANDOM, STRATEGY_HASH
+from mops.protocol import STRATEGY_RANDOM, STRATEGY_HASH, build_header
+
+TEST_HOSTNAME = "test-host"
 
 
 class TestScheduler:
@@ -295,6 +298,11 @@ class TestHTTPCONNECT:
 class TestHTTPRequest:
     """Test plain HTTP proxy (GET/POST/etc)."""
 
+    @pytest.fixture(autouse=True)
+    def mock_hostname(self):
+        with patch("mops.client.socket.gethostname", return_value=TEST_HOSTNAME):
+            yield
+
     @pytest.mark.asyncio
     async def test_http_get_request(self):
         client = MopsClient(listen_port=10081)
@@ -335,7 +343,7 @@ class TestHTTPRequest:
                 reader, writer, "GET", "http://httpbin.org/ip", b"GET http://httpbin.org/ip HTTP/1.1\r\n"
             )
             # Verify tunnel header sent
-            mock_server_writer.write.assert_any_call(b"httpbin.org:80\n")
+            mock_server_writer.write.assert_any_call(build_header("httpbin.org", 80, 10081, TEST_HOSTNAME))
             # Verify rewritten request was sent (GET /ip not GET http://httpbin.org/ip)
             mock_server_writer.write.assert_any_call(b"GET /ip HTTP/1.1\r\n")
             # Verify tunnel was called
@@ -382,7 +390,7 @@ class TestHTTPRequest:
             await client._handle_http_request(
                 reader, writer, "POST", "http://api.example.com/data", b"POST http://api.example.com/data HTTP/1.1\r\n"
             )
-            mock_server_writer.write.assert_any_call(b"api.example.com:80\n")
+            mock_server_writer.write.assert_any_call(build_header("api.example.com", 80, 10081, TEST_HOSTNAME))
             mock_server_writer.write.assert_any_call(b"POST /data HTTP/1.1\r\n")
             mock_tunnel.assert_called_once()
 
@@ -438,7 +446,7 @@ class TestHTTPRequest:
                 reader, writer, "GET", "http://api.example.com/search?q=test&page=1",
                 b"GET http://api.example.com/search?q=test&page=1 HTTP/1.1\r\n"
             )
-            mock_server_writer.write.assert_any_call(b"api.example.com:80\n")
+            mock_server_writer.write.assert_any_call(build_header("api.example.com", 80, 10081, TEST_HOSTNAME))
             mock_server_writer.write.assert_any_call(b"GET /search?q=test&page=1 HTTP/1.1\r\n")
 
     @pytest.mark.asyncio
@@ -476,7 +484,7 @@ class TestHTTPRequest:
                 reader, writer, "GET", "http://internal.dev:8080/api",
                 b"GET http://internal.dev:8080/api HTTP/1.1\r\n"
             )
-            mock_server_writer.write.assert_any_call(b"internal.dev:8080\n")
+            mock_server_writer.write.assert_any_call(build_header("internal.dev", 8080, 10081, TEST_HOSTNAME))
             mock_server_writer.write.assert_any_call(b"GET /api HTTP/1.1\r\n")
 
     @pytest.mark.asyncio

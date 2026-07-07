@@ -35,6 +35,7 @@ web/node_modules/
 # Playwright
 web/test-results/
 web/playwright-report/
+web/e2e/*.png
 
 # Nuitka build output
 *.exe

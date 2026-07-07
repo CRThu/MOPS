@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mops.server import MdnsBroadcaster, MopsServer
+from mops.protocol import build_header
 
 
 class TestMopsServer:
@@ -43,7 +44,7 @@ class TestMopsServer:
     async def test_handle_client_connection_error(self):
         server = MopsServer(port=10080)
         reader = AsyncMock(spec=asyncio.StreamReader)
-        reader.readline = AsyncMock(return_value=b"example.com:80\n")
+        reader.readline = AsyncMock(return_value=build_header("example.com", 80))
         writer = AsyncMock(spec=asyncio.StreamWriter)
         writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
         writer.close = MagicMock()
@@ -60,7 +61,7 @@ class TestMopsServer:
     async def test_handle_client_success(self):
         server = MopsServer(port=10080)
         reader = AsyncMock(spec=asyncio.StreamReader)
-        reader.readline = AsyncMock(return_value=b"example.com:80\n")
+        reader.readline = AsyncMock(return_value=build_header("example.com", 80))
 
         target_reader = AsyncMock(spec=asyncio.StreamReader)
         target_writer = AsyncMock(spec=asyncio.StreamWriter)
@@ -87,7 +88,7 @@ class TestMopsServer:
         from mops.stats import ConnectionTracker
         server = MopsServer(port=10080, conn_tracker=ConnectionTracker())
         reader = AsyncMock(spec=asyncio.StreamReader)
-        reader.readline = AsyncMock(return_value=b"example.com:80\n")
+        reader.readline = AsyncMock(return_value=build_header("example.com", 80))
         writer = AsyncMock(spec=asyncio.StreamWriter)
         writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
         writer.close = MagicMock()
@@ -101,7 +102,7 @@ class TestMopsServer:
     async def test_handle_client_unexpected_error(self):
         server = MopsServer(port=10080)
         reader = AsyncMock(spec=asyncio.StreamReader)
-        reader.readline = AsyncMock(return_value=b"example.com:80\n")
+        reader.readline = AsyncMock(return_value=build_header("example.com", 80))
         writer = AsyncMock(spec=asyncio.StreamWriter)
         writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
         writer.close = MagicMock()
@@ -115,7 +116,7 @@ class TestMopsServer:
     async def test_handle_client_wait_closed_runtime_error(self):
         server = MopsServer(port=10080)
         reader = AsyncMock(spec=asyncio.StreamReader)
-        reader.readline = AsyncMock(return_value=b"example.com:80\n")
+        reader.readline = AsyncMock(return_value=build_header("example.com", 80))
         writer = AsyncMock(spec=asyncio.StreamWriter)
         writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
         writer.close = MagicMock()

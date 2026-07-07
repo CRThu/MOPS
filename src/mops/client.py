@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 import struct
 from loguru import logger
 
 from .discovery import NodeDiscovery
-from .protocol import STRATEGY_RANDOM
+from .protocol import STRATEGY_RANDOM, build_header
 from .scheduler import NoAvailableNodeError, Scheduler
 from .stats import TrafficStats
 from .tunnel import tunnel
@@ -25,6 +26,7 @@ class MopsClient:
     ) -> None:
         self.listen_port = listen_port
         self.listen_host = listen_host
+        self._hostname = socket.gethostname()
         self._scheduler = Scheduler(strategy)
         self._discovery = NodeDiscovery(self._scheduler)
         self._server: asyncio.Server | None = None
@@ -208,8 +210,8 @@ class MopsClient:
             )
 
             # Send tunnel header
-            header = f"{host}:{port}\n"
-            server_writer.write(header.encode())
+            header = build_header(host, port, self.listen_port, self._hostname)
+            server_writer.write(header)
             await server_writer.drain()
 
             # Read full request from client
@@ -273,9 +275,9 @@ class MopsClient:
                 node.ip, node.port
             )
 
-            # Send tunnel header: "host:port\n"
-            header = f"{target_host}:{target_port}\n"
-            server_writer.write(header.encode())
+            # Send tunnel header
+            header = build_header(target_host, target_port, self.listen_port, self._hostname)
+            server_writer.write(header)
             await server_writer.drain()
 
             # Bidirectional tunnel

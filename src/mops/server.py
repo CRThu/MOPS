@@ -11,6 +11,7 @@ from zeroconf import ServiceInfo, Zeroconf
 from .protocol import (
     BUFFER_SIZE,
     MOPS_SERVICE_TYPE,
+    parse_header,
 )
 from .tunnel import tunnel
 
@@ -130,16 +131,14 @@ class MopsServer:
             if not header:
                 return
 
-            target = header.decode().strip()
-            if ":" not in target:
-                logger.warning(f"Invalid target header: {target!r}")
+            try:
+                host, port, client_port, client_host = parse_header(header)
+            except (ValueError, KeyError) as e:
+                logger.warning(f"Invalid header: {e}")
                 return
 
-            host, port_str = target.rsplit(":", 1)
-            port = int(port_str)
-
             if self._conn_tracker:
-                conn_id = self._conn_tracker.start(peer_ip, host, port)
+                conn_id = self._conn_tracker.start(peer_ip, host, port, client_port=client_port, client_host=client_host)
 
             logger.debug(f"Connecting to {host}:{port}")
             target_reader, target_writer = await asyncio.open_connection(host, port)

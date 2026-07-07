@@ -142,10 +142,15 @@ prepend:
 
 启动服务后，浏览器访问 `http://127.0.0.1:10082/` 查看可视化面板：
 
-- AntV G6 5.x 拓扑图，dagre 从左到右布局（App → Client → Server → Internet）
-- 活跃连接橙色流动动画，15 秒自动刷新
-- 右侧 Connections 面板：实时显示所有连接状态
-- 底部 Server Traffic 表格：各节点上下行流量
+![Dashboard](img/dashboard.png)
+
+- **智能拓扑图** — AntV G6 5.x 拓扑图，dagre 从左到右布局，自动发现网络中的 Server 和 Client 节点
+- **两种模式**：
+  - **集成模式**（`mops run both`）：显示完整的 `App → Client → Server → Internet` 链路
+  - **独立模式**（`mops dashboard`）：从网络推断 Client 节点，仅显示 `Client → Server → Internet`
+- **语义缩放**：节点少时显示 hostname + IP:port 详情，节点多时自动隐藏标签避免重叠
+- **活跃连接** — 橙色流动粒子动画，15 秒自动刷新
+- **节点状态** — 绿色活跃、灰色熔断、暗色离线，实时更新
 
 ### REST API
 
@@ -291,7 +296,7 @@ MOPS/
 │       ├── dashboard.spec.ts    # 基础 Dashboard 测试 (6)
 │       ├── multi-node.spec.ts   # 多节点渲染测试 (13)
 │       └── fixtures/mock-data.ts # 测试数据
-├── tests/                # 202 个后端测试 + 25 个前端单元测试 + 19 个 E2E 渲染测试，85% 覆盖率
+├── tests/                # 202 个后端测试 + 34 个前端单元测试 + 26 个 E2E 渲染测试，85% 覆盖率
 ├── build.py              # Nuitka 打包脚本
 ├── pyproject.toml        # 项目配置 (hatchling)
 ├── .gitignore

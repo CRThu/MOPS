@@ -33,6 +33,7 @@ const PAL: Record<string, { fill: string; stroke: string }> = {
 /* ─── Graph state ─── */
 let graph: Graph | null = null
 let currentZoom = 1
+let totalNodeCount = 0
 
 export function createGraph(el: HTMLElement): Graph {
   graph = new Graph({
@@ -70,6 +71,7 @@ export function createGraph(el: HTMLElement): Graph {
       },
     },
     animation: false,
+    zoomRange: [0.2, 3],
   })
 
   // Track zoom for semantic zoom
@@ -81,15 +83,38 @@ export function createGraph(el: HTMLElement): Graph {
   return graph
 }
 
+function computeLabel(nodeType: string, data: any): string {
+  const fullLabel = data?.label ?? ''
+  if (nodeType === 'server' || nodeType === 'offline') {
+    const hostname = data?.hostname ?? ''
+    const ip = data?.ip ?? ''
+    const port = data?.port
+    if (totalNodeCount <= 6 && hostname && ip && port) {
+      return `${hostname}\n${ip}:${port}`
+    }
+    if (totalNodeCount <= 15 && hostname) {
+      return hostname
+    }
+    return ''
+  }
+  if (nodeType === 'client') {
+    if (totalNodeCount <= 6) return fullLabel
+    if (totalNodeCount <= 15) return fullLabel
+    return ''
+  }
+  return fullLabel
+}
+
 function updateLabelVisibility() {
   if (!graph) return
   const nodes = graph.getNodes()
   for (const node of nodes) {
     const model = node.getModel()
-    const show = currentZoom >= 0.7
+    const nodeType = (model.data as any)?.nodeType ?? ''
+    const show = currentZoom >= 0.5
     graph.updateNode(model.id!, {
       style: {
-        label: show ? (model.data as any)?.label : '',
+        label: show ? computeLabel(nodeType, model.data) : '',
       },
     })
   }
@@ -97,12 +122,13 @@ function updateLabelVisibility() {
 
 export async function updateGraph(g: Graph, data: TopoData) {
   graph = g
+  totalNodeCount = data.nodes.length
 
   const nodes = data.nodes.map(n => ({
     id: n.id,
     type: 'rect',
     data: {
-      label: n.label,
+      label: computeLabel(n.type, n),
       nodeType: n.type,
       hostname: n.hostname,
       ip: n.ip,

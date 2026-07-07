@@ -5,6 +5,8 @@
 export interface ConnInfo {
   conn_id: string
   client_ip: string
+  client_port?: number
+  client_host?: string
   target_host: string
   target_port: number
   status: 'active' | 'completed'
@@ -40,6 +42,7 @@ export interface DashboardStatus {
   uptime: number
   mode: string
   strategy: string
+  local_client?: { ip: string; port: number } | null
 }
 
 export interface TopoNode {

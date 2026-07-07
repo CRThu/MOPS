@@ -116,6 +116,8 @@ class TrafficStats:
 class ConnectionRecord:
     conn_id: str
     client_ip: str
+    client_port: int
+    client_host: str
     target_host: str
     target_port: int
     status: str  # "active" | "completed"
@@ -137,13 +139,15 @@ class ConnectionTracker:
         self._lock = threading.Lock()
         self._counter = 0
 
-    def start(self, client_ip: str, target_host: str, target_port: int) -> str:
+    def start(self, client_ip: str, target_host: str, target_port: int, client_port: int = 0, client_host: str = "") -> str:
         with self._lock:
             self._counter += 1
             conn_id = str(self._counter)
             self._active[conn_id] = ConnectionRecord(
                 conn_id=conn_id,
                 client_ip=client_ip,
+                client_port=client_port,
+                client_host=client_host,
                 target_host=target_host,
                 target_port=target_port,
                 status="active",
@@ -168,6 +172,8 @@ class ConnectionTracker:
                 result.append({
                     "conn_id": r.conn_id,
                     "client_ip": r.client_ip,
+                    "client_port": r.client_port,
+                    "client_host": r.client_host,
                     "target_host": r.target_host,
                     "target_port": r.target_port,
                     "status": "active",
@@ -177,6 +183,8 @@ class ConnectionTracker:
                 result.append({
                     "conn_id": r.conn_id,
                     "client_ip": r.client_ip,
+                    "client_port": r.client_port,
+                    "client_host": r.client_host,
                     "target_host": r.target_host,
                     "target_port": r.target_port,
                     "status": "completed",

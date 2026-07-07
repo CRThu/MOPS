@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mops.client import MopsClient
-from mops.protocol import STRATEGY_RANDOM
+from mops.protocol import STRATEGY_RANDOM, build_header
 from mops.scheduler import NodeInfo, Scheduler
 from mops.server import MopsServer
 from mops.stats import TrafficStats
@@ -100,8 +100,8 @@ class TestEndToEnd:
                 reader, writer = await asyncio.open_connection("127.0.0.1", server_port)
 
                 # Send tunnel header
-                header = f"127.0.0.1:{target_port}\n"
-                writer.write(header.encode())
+                header = build_header("127.0.0.1", target_port)
+                writer.write(header)
                 await writer.drain()
 
                 # Send data

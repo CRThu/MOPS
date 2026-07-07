@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { mockStatusEmpty, mockStatusWithServers } from './fixtures/mock-data'
+import { mockStatusEmpty, mockStatusWithServers, mockStatusStandalone } from './fixtures/mock-data'
 
 test.describe('Dashboard', () => {
   test('loads with correct title and stats bar', async ({ page }) => {
@@ -20,11 +20,8 @@ test.describe('Dashboard', () => {
     )
     await page.goto('/')
 
-    // Verify topology panel is present and visible
     const panel = page.locator('.topo-panel')
     await expect(panel).toBeVisible()
-
-    // Container exists (G6 renders into it)
     await expect(page.locator('#topo-container')).toBeVisible()
   })
 
@@ -34,14 +31,9 @@ test.describe('Dashboard', () => {
     )
     await page.goto('/')
 
-    // Wait for poll cycle to complete
     await expect(page.locator('#cards-count')).toHaveText('2', { timeout: 10000 })
-
-    // Should have server cards
     const cards = page.locator('.server-card')
     await expect(cards).toHaveCount(2)
-
-    // First card should be active (sorted active first)
     await expect(cards.first().locator('.card-status')).toHaveText('ACTIVE')
   })
 
@@ -73,5 +65,16 @@ test.describe('Dashboard', () => {
 
     await expect(page.locator('#hdr-uptime')).toContainText('1d 0m')
     await expect(page.locator('#hdr-status')).toContainText('LIVE')
+  })
+
+  test('standalone mode renders correctly', async ({ page }) => {
+    await page.route('**/api/dashboard', (route) =>
+      route.fulfill({ json: mockStatusStandalone })
+    )
+    await page.goto('/')
+
+    await expect(page.locator('#cards-count')).toHaveText('2', { timeout: 10000 })
+    await expect(page.locator('#topo-container')).toBeVisible()
+    await page.screenshot({ path: 'e2e/standalone-dashboard.png', fullPage: false })
   })
 })

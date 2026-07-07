@@ -77,7 +77,7 @@ class MopsApi:
         speed_up, speed_down = (0, 0)
         if self._traffic_history:
             speed_up, speed_down = self._traffic_history.compute_speed()
-        return {
+        result = {
             "nodes": nodes,
             "total_up": stats.get_total_up(),
             "total_down": stats.get_total_down(),
@@ -86,6 +86,9 @@ class MopsApi:
             "active_conns": stats.active_conns,
             "uptime": time.monotonic() - self._start_time,
         }
+        if self._client_stats:
+            result["local_client"] = {"ip": self._client_listen, "port": self._client_port}
+        return result
 
     async def _handle_server_status(self, request: web.Request) -> web.Response:
         if not self._server_stats:

@@ -170,6 +170,7 @@ class MopsDashboard:
             "uptime": time.monotonic() - self._start_time,
             "mode": "dashboard",
             "strategy": "mDNS",
+            "local_client": None,
         }
 
     async def _handle_status(self, request: web.Request) -> web.Response:

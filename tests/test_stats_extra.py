@@ -133,3 +133,11 @@ class TestConnectionTrackerExtra:
     def test_end_nonexistent_conn(self):
         tracker = ConnectionTracker()
         tracker.end("nonexistent")  # should not crash
+
+    def test_client_host_stored(self):
+        tracker = ConnectionTracker()
+        conn_id = tracker.start("10.0.0.1", "example.com", 443, client_port=10090, client_host="MyPC")
+        conns = tracker.get_connections()
+        assert len(conns) == 1
+        assert conns[0]["client_host"] == "MyPC"
+        assert conns[0]["client_port"] == 10090
