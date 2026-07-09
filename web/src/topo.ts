@@ -86,14 +86,13 @@ export function createGraph(el: HTMLElement): Graph {
 function computeLabel(nodeType: string, data: any): string {
   const fullLabel = data?.label ?? ''
   if (nodeType === 'server' || nodeType === 'offline') {
-    const hostname = data?.hostname ?? ''
     const ip = data?.ip ?? ''
     const port = data?.port
-    if (totalNodeCount <= 6 && hostname && ip && port) {
-      return `${hostname}\n${ip}:${port}`
+    if (totalNodeCount <= 6 && ip && port) {
+      return `${ip}:${port}`
     }
-    if (totalNodeCount <= 15 && hostname) {
-      return hostname
+    if (totalNodeCount <= 15 && data?.hostname) {
+      return data.hostname
     }
     return ''
   }
@@ -182,6 +181,6 @@ export async function updateGraph(g: Graph, data: TopoData) {
 
   g.setData({ nodes, edges })
   await g.render()
-  g.fitView()
+  g.fitView({ padding: 40 })
   updateLabelVisibility()
 }
