@@ -1,5 +1,44 @@
 import type { DashboardStatus } from '../../src/types'
 
+// Single server — minimal topology
+export const mockStatusSingleServer: DashboardStatus = {
+  nodes: [
+    { ip: '10.0.0.1', port: 10080, api_port: 10082, hostname: 'lone-server', fails: 0, status: 'active', total_up: 2097152, total_down: 4194304, active_conns: 1, connections: [], speed_up: 2048, speed_down: 4096 },
+  ],
+  connections: [
+    { conn_id: 'c1', client_ip: '192.168.1.10', client_port: 10090, target_host: 'example.com', target_port: 443, status: 'active', started_at: Date.now() / 1000 - 60, server_node: '10.0.0.1:10080' },
+  ],
+  total_up: 2097152,
+  total_down: 4194304,
+  speed_up: 2048,
+  speed_down: 4096,
+  active_conns: 1,
+  uptime: 86400,
+  mode: 'dashboard',
+  strategy: 'mDNS',
+  local_client: null,
+}
+
+// Single server + single client
+export const mockStatusSingleServerSingleClient: DashboardStatus = {
+  nodes: [
+    { ip: '10.0.0.1', port: 10080, api_port: 10082, hostname: 'my-server', fails: 0, status: 'active', total_up: 1048576, total_down: 2097152, active_conns: 2, connections: [], speed_up: 1024, speed_down: 2048 },
+  ],
+  connections: [
+    { conn_id: 'c1', client_ip: '192.168.1.10', client_port: 10090, target_host: 'amazon.com', target_port: 443, status: 'active', started_at: Date.now() / 1000 - 120, server_node: '10.0.0.1:10080' },
+    { conn_id: 'c2', client_ip: '192.168.1.10', client_port: 10090, target_host: 'google.com', target_port: 443, status: 'active', started_at: Date.now() / 1000 - 60, server_node: '10.0.0.1:10080' },
+  ],
+  total_up: 1048576,
+  total_down: 2097152,
+  speed_up: 1024,
+  speed_down: 2048,
+  active_conns: 2,
+  uptime: 43200,
+  mode: 'dashboard',
+  strategy: 'mDNS',
+  local_client: null,
+}
+
 export const mockStatusEmpty: DashboardStatus = {
   nodes: [],
   connections: [],

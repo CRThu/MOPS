@@ -16,6 +16,7 @@ from mops.stats import NodeRegistry, TrafficHistory
 class TestMopsDashboard:
     def setup_method(self):
         self.dashboard = MopsDashboard(port=0)
+        self.dashboard._http_session = AsyncMock()
 
     def test_build_status_empty(self):
         status = self.dashboard._build_status()
@@ -148,13 +149,9 @@ class TestMopsDashboard:
         mock_response.__aenter__ = AsyncMock(return_value=mock_response)
         mock_response.__aexit__ = AsyncMock(return_value=False)
 
-        mock_session = AsyncMock()
-        mock_session.get = MagicMock(return_value=mock_response)
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=False)
+        self.dashboard._http_session.get = MagicMock(return_value=mock_response)
 
-        with patch("mops.dashboard.aiohttp.ClientSession", return_value=mock_session):
-            await self.dashboard._query(node)
+        await self.dashboard._query(node)
 
         assert "192.168.1.1:10080" in self.dashboard._cache
         assert self.dashboard._cache["192.168.1.1:10080"]["total_up"] == 500
@@ -164,8 +161,9 @@ class TestMopsDashboard:
         node = NodeInfo(ip="192.168.1.1", port=10080, api_port=10082)
         self.dashboard._cache["192.168.1.1:10080"] = {"total_up": 100}
 
-        with patch("mops.dashboard.aiohttp.ClientSession", side_effect=ConnectionError("refused")):
-            await self.dashboard._query(node)
+        self.dashboard._http_session.get = MagicMock(side_effect=ConnectionError("refused"))
+
+        await self.dashboard._query(node)
 
         assert self.dashboard._cache["192.168.1.1:10080"]["total_up"] == 100
 
@@ -185,7 +183,7 @@ class TestMopsDashboard:
     async def test_handle_dashboard_fallback(self):
         app = web.Application()
         app.router.add_get("/", self.dashboard._handle_dashboard)
-        with patch("mops.dashboard._STATIC_DIR") as mock_dir:
+        with patch("mops.web._STATIC_DIR") as mock_dir:
             mock_dir.__truediv__ = MagicMock(return_value=MagicMock(exists=MagicMock(return_value=False)))
             async with TestClient(TestServer(app)) as client:
                 resp = await client.get("/")

@@ -1,12 +1,15 @@
-"""Shared protocol constants for MOPS."""
+"""Shared protocol constants and data structures for MOPS."""
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from dataclasses import dataclass
 
 MOPS_SERVICE_TYPE = "_mops-proxy._tcp.local."
+SERVICE_NAME_PREFIX = "mops-server-"
 DEFAULT_BASE_PORT = 10080
+DEFAULT_CLIENT_PORT_OFFSET = 1
+DEFAULT_API_PORT_OFFSET = 2
 BUFFER_SIZE = 65536
 MAX_FAILS = 2
 RECOVERY_INTERVAL = 30  # seconds
@@ -15,9 +18,20 @@ NODE_HISTORY_TTL = 3600  # 1 hour: keep offline nodes in registry
 SPEED_WINDOW = 5  # seconds: ring buffer capacity for speed calculation
 STRATEGY_RANDOM = "random"
 STRATEGY_HASH = "hash"
-LOG_DIR = Path.home() / ".mops" / "logs"
 
 PROTOCOL_VERSION = 1
+
+
+@dataclass
+class NodeInfo:
+    ip: str
+    port: int
+    api_port: int = 0
+    weight: int = 1
+    fails: int = 0
+    name: str = ""
+    hostname: str = ""
+    last_fail: float = 0.0
 
 
 def build_header(host: str, port: int, client_port: int = 0, client_host: str = "") -> bytes:
@@ -46,6 +60,11 @@ def parse_header(raw: bytes) -> tuple[str, int, int, str]:
         raise ValueError(f"invalid header format: {line[:60]!r}")
 
     h = json.loads(line)
+
+    version = h.get("version")
+    if version is not None and version != PROTOCOL_VERSION:
+        raise ValueError(f"unsupported protocol version: {version}")
+
     host_port = h["host"]
     host, port_str = host_port.rsplit(":", 1)
     return host, int(port_str), int(h.get("client_port", 0)), h.get("client_host", "")

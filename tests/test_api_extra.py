@@ -3,7 +3,7 @@
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from mops.api import MopsApi
 from mops.stats import TrafficStats
@@ -50,15 +50,17 @@ class TestDashboardHTML:
             assert "MOPS" in html
 
     @pytest.mark.asyncio
-    async def test_dashboard_has_topology_container(self):
+    async def test_dashboard_has_fallback_content(self):
         stats = TrafficStats()
         api = MopsApi(port=0, server_stats=stats, mode="both")
 
         app = web.Application()
         app.router.add_get("/", api._handle_dashboard)
 
-        async with TestClient(TestServer(app)) as client:
-            resp = await client.get("/")
-            html = await resp.text()
-            # New dashboard has topo-container, old has cytoscape
-            assert "topo-container" in html or "cytoscape" in html
+        with patch("mops.web._STATIC_DIR") as mock_dir:
+            mock_dir.__truediv__ = MagicMock(return_value=MagicMock(exists=MagicMock(return_value=False)))
+            async with TestClient(TestServer(app)) as client:
+                resp = await client.get("/")
+                html = await resp.text()
+                # Fallback should mention build instructions
+                assert "bun run build" in html

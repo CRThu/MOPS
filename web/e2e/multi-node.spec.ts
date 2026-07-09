@@ -1,10 +1,51 @@
 import { test, expect } from '@playwright/test'
 import {
+  mockStatusSingleServer,
+  mockStatusSingleServerSingleClient,
   mockStatusThreeServersMixed,
   mockStatusFiveServers,
   mockStatusMultipleClients,
   mockStatusAllOffline,
 } from './fixtures/mock-data'
+
+test.describe('Single-Server Topology Rendering', () => {
+  test('renders 1 server with active state', async ({ page }) => {
+    await page.route('**/api/dashboard', (route) =>
+      route.fulfill({ json: mockStatusSingleServer })
+    )
+    await page.goto('/')
+
+    await expect(page.locator('#cards-count')).toHaveText('1', { timeout: 10000 })
+
+    const cards = page.locator('.server-card')
+    await expect(cards).toHaveCount(1)
+    await expect(cards.first().locator('.card-status')).toHaveText('ACTIVE')
+
+    await expect(page.locator('.topo-panel')).toBeVisible()
+    await expect(page.locator('#topo-container')).toBeVisible()
+
+    await expect(page.locator('#stat-traffic')).toContainText('MB')
+    await expect(page.locator('#stat-conns')).toHaveText('1')
+  })
+
+  test('renders 1 server + 1 client connection', async ({ page }) => {
+    await page.route('**/api/dashboard', (route) =>
+      route.fulfill({ json: mockStatusSingleServerSingleClient })
+    )
+    await page.goto('/')
+
+    await expect(page.locator('#cards-count')).toHaveText('1', { timeout: 10000 })
+
+    const cards = page.locator('.server-card')
+    await expect(cards).toHaveCount(1)
+
+    await expect(page.locator('#topo-container')).toBeVisible()
+    const canvases = page.locator('#topo-container canvas')
+    await expect(canvases.first()).toBeVisible()
+
+    await expect(page.locator('#stat-conns')).toHaveText('2')
+  })
+})
 
 test.describe('Multi-Server Topology Rendering', () => {
   test('renders 3 servers with mixed states (active/circuit-open)', async ({ page }) => {

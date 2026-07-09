@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
+
 from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
 
-from .protocol import MOPS_SERVICE_TYPE
-from .scheduler import NodeInfo, Scheduler
+from .protocol import MOPS_SERVICE_TYPE, SERVICE_NAME_PREFIX, NodeInfo
+from .scheduler import Scheduler
 
 # Type hint for NodeRegistry to avoid circular imports
 from typing import TYPE_CHECKING
@@ -69,20 +71,10 @@ class NodeDiscovery(ServiceListener):
         # Extract hostname from service name:
         # mops-server-{hostname}-{port}._mops-proxy._tcp.local.
         service_name = info.name or ""
-        if service_name.startswith("mops-server-"):
-            rest = service_name.split("mops-server-", 1)[1]
-            # Remove mDNS suffix if present
-            for suffix in ("._mops-proxy._tcp.local.", "._mops-proxy._tcp.local"):
-                if rest.endswith(suffix):
-                    rest = rest[:-len(suffix)]
-                    break
-            # rest = "{hostname}-{port}", strip trailing port
-            parts = rest.rsplit("-", 1)
-            if len(parts) == 2 and parts[1].isdigit():
-                hostname = parts[0]
-            else:
-                hostname = rest
-        if not hostname:
+        m = re.match(rf"{re.escape(SERVICE_NAME_PREFIX)}(.+)-(\d+)\._mops-proxy._tcp\.local\.?$", service_name)
+        if m:
+            hostname = m.group(1)
+        elif not hostname:
             hostname = ip
 
         node = NodeInfo(

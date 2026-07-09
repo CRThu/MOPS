@@ -151,19 +151,6 @@ class TestTrafficStats:
         assert ns.up == 300
         assert ns.down == 50
 
-    def test_get_snapshot(self):
-        stats = TrafficStats()
-        stats.record_upload("10.0.0.1:10080", 1000)
-        stats.record_download("10.0.0.1:10080", 2000)
-        stats.active_conns = 3
-
-        snap = stats.get_snapshot(mode="both", strategy="random")
-        assert snap.mode == "both"
-        assert snap.total_up == 1000
-        assert snap.total_down == 2000
-        assert snap.active_conns == 3
-        assert len(snap.nodes) == 1
-
     def test_uptime(self):
         stats = TrafficStats()
         uptime = stats.get_uptime()

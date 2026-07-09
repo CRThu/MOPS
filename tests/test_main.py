@@ -189,27 +189,27 @@ class TestMain:
 
 
 class TestCmdFunctions:
-    @patch("mops.__main__._run_both")
+    @patch("mops.__main__._run_components")
     def test_cmd_run_both(self, mock_run):
         from mops.__main__ import cmd_run
         from argparse import Namespace
-        args = Namespace(mode="both", port=10080, strategy="random", service=False, listen="127.0.0.1", weight=1)
+        args = Namespace(mode="both", port=10080, strategy="random", service=False, listen="127.0.0.1", weight=1, bind="")
         cmd_run(args)
         mock_run.assert_called_once()
 
-    @patch("mops.__main__._run_server")
+    @patch("mops.__main__._run_components")
     def test_cmd_run_server(self, mock_run):
         from mops.__main__ import cmd_run
         from argparse import Namespace
-        args = Namespace(mode="server", port=10080, strategy="random", service=False, listen="127.0.0.1", weight=1)
+        args = Namespace(mode="server", port=10080, strategy="random", service=False, listen="127.0.0.1", weight=1, bind="")
         cmd_run(args)
         mock_run.assert_called_once()
 
-    @patch("mops.__main__._run_client")
+    @patch("mops.__main__._run_components")
     def test_cmd_run_client(self, mock_run):
         from mops.__main__ import cmd_run
         from argparse import Namespace
-        args = Namespace(mode="client", port=10080, strategy="random", service=False, listen="127.0.0.1", weight=1)
+        args = Namespace(mode="client", port=10080, strategy="random", service=False, listen="127.0.0.1", weight=1, bind="")
         cmd_run(args)
         mock_run.assert_called_once()
 

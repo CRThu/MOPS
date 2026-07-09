@@ -64,9 +64,3 @@ class TestDashboardHTML:
             html = await resp.text()
             assert "stats-bar" in html
             assert "Server" in html
-
-    @pytest.mark.asyncio
-    async def test_dashboard_loads_from_file(self):
-        from mops.api import _DASHBOARD_HTML_PATH
-        assert _DASHBOARD_HTML_PATH.exists()
-        assert _DASHBOARD_HTML_PATH.suffix == ".html"

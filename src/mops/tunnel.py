@@ -56,5 +56,7 @@ async def tunnel(
             pipe(r1, w2, stats, node_name, direction="down"),
             pipe(r2, w1, stats, node_name, direction="up"),
         )
-    except Exception:
+    except (ConnectionError, OSError, asyncio.IncompleteReadError):
+        pass
+    except asyncio.CancelledError:
         pass

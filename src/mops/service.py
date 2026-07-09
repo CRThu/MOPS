@@ -12,6 +12,8 @@ from loguru import logger
 
 from .protocol import DEFAULT_BASE_PORT, STRATEGY_RANDOM
 
+LOG_DIR = Path.home() / ".mops" / "logs"
+
 
 # Config file stores runtime params (mode, port, strategy)
 _CONFIG_DIR = Path.home() / ".config" / "mops"
@@ -110,7 +112,7 @@ def status() -> dict:
 
 def _install_windows() -> None:
     exe = _get_exe_path()
-    bin_path = f"{exe} --service"
+    bin_path = f"{exe} run --service"
     _run_cmd([
         "sc", "create", "MOPS",
         f"binPath= {bin_path}",
@@ -141,7 +143,7 @@ UNIT_CONTENT = textwrap.dedent("""\
 
     [Service]
     Type=simple
-    ExecStart={exe} --service
+    ExecStart={exe} run --service
     Restart=on-failure
     RestartSec=5
 

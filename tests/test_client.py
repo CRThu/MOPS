@@ -71,7 +71,7 @@ class TestScheduler:
         assert len(sched.get_active_nodes()) == 0
 
         # Simulate time passing
-        node._last_fail = time.monotonic() - 31  # > RECOVERY_INTERVAL
+        node.last_fail = time.monotonic() - 31  # > RECOVERY_INTERVAL
         sched.recover_nodes()
         assert len(sched.get_active_nodes()) == 1
 

@@ -4,18 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import time
-from pathlib import Path
 
 import aiohttp
 from aiohttp import web
 from loguru import logger
 
 from .discovery import NodeDiscovery
-from .protocol import DEFAULT_BASE_PORT, MAX_FAILS, MOPS_SERVICE_TYPE
-from .scheduler import NodeInfo, Scheduler
+from .protocol import DEFAULT_BASE_PORT, MAX_FAILS, MOPS_SERVICE_TYPE, NodeInfo
+from .scheduler import Scheduler
 from .stats import NodeRegistry, TrafficHistory
-
-_STATIC_DIR = Path(__file__).parent / "static"
+from .web import serve_index, setup_static_routes
 
 
 class MopsDashboard:
@@ -31,8 +29,13 @@ class MopsDashboard:
         self._start_time = time.monotonic()
         self._discovery: NodeDiscovery | None = None
         self._runner: web.AppRunner | None = None
+        self._http_session: aiohttp.ClientSession | None = None
 
     async def run(self) -> None:
+        # Reusable HTTP session for querying server APIs
+        timeout = aiohttp.ClientTimeout(total=3)
+        self._http_session = aiohttp.ClientSession(timeout=timeout)
+
         # mDNS discovery
         self._discovery = NodeDiscovery(self._scheduler, registry=self._registry)
         self._discovery.start()
@@ -46,15 +49,7 @@ class MopsDashboard:
         app.router.add_get("/", self._handle_dashboard)
         app.router.add_get("/api/dashboard", self._handle_status)
         app.router.add_get("/api/server", self._handle_status)  # alias
-
-        if _STATIC_DIR.is_dir():
-            app.router.add_static("/static", _STATIC_DIR)
-            for f in _STATIC_DIR.iterdir():
-                if f.suffix in (".js", ".css"):
-                    app.router.add_get(
-                        f"/{f.name}",
-                        lambda req, fp=f: web.FileResponse(fp),
-                    )
+        setup_static_routes(app)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -98,13 +93,11 @@ class MopsDashboard:
     async def _query(self, node: NodeInfo) -> None:
         url = f"http://{node.ip}:{node.api_port}/api/server"
         try:
-            timeout = aiohttp.ClientTimeout(total=3)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        async with self._lock:
-                            self._cache[f"{node.ip}:{node.port}"] = data
+            async with self._http_session.get(url) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    async with self._lock:
+                        self._cache[f"{node.ip}:{node.port}"] = data
         except Exception:
             pass  # Server unreachable, keep stale cache
 
@@ -177,13 +170,11 @@ class MopsDashboard:
         return web.json_response(self._build_status())
 
     async def _handle_dashboard(self, request: web.Request) -> web.Response:
-        index = _STATIC_DIR / "index.html"
-        if index.exists():
-            return web.FileResponse(index)
-        return web.Response(text="<h1>MOPS Dashboard</h1><p>No frontend built yet.</p>",
-                          content_type="text/html")
+        return await serve_index(request)
 
     async def stop(self) -> None:
+        if self._http_session:
+            await self._http_session.close()
         if self._discovery:
             self._discovery.stop()
         if self._runner:

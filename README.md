@@ -18,11 +18,11 @@
 ## 安装
 
 ```bash
+# uv (推荐)
+uv tool install carrot-mops
+
 # pip
 pip install carrot-mops
-
-# uv
-uv tool install carrot-mops
 ```
 
 ## 快速开始
@@ -168,14 +168,18 @@ prepend:
     {
       "ip": "192.168.1.100",
       "port": 10080,
+      "api_port": 10082,
+      "hostname": "Carrot-PC",
       "fails": 0,
-      "up": 1024000,
-      "down": 5120000
+      "status": "active",
+      "total_up": 1024000,
+      "total_down": 5120000,
+      "active_conns": 3,
+      "connections": [],
+      "speed_up": 1024,
+      "speed_down": 5120
     }
   ],
-  "total_up": 1024000,
-  "total_down": 5120000,
-  "active_conns": 3,
   "connections": [
     {
       "conn_id": "1",
@@ -184,18 +188,17 @@ prepend:
       "target_port": 443,
       "status": "active",
       "started_at": 12345.6
-    },
-    {
-      "conn_id": "2",
-      "client_ip": "192.168.1.50",
-      "target_host": "google.com",
-      "target_port": 443,
-      "status": "completed",
-      "started_at": 12300.0,
-      "ended_at": 12340.0
     }
   ],
-  "uptime": 3600
+  "total_up": 1024000,
+  "total_down": 5120000,
+  "speed_up": 1024,
+  "speed_down": 5120,
+  "active_conns": 3,
+  "uptime": 3600,
+  "mode": "both",
+  "strategy": "random",
+  "local_client": {"ip": "127.0.0.1", "port": 10081}
 }
 ```
 
@@ -269,15 +272,20 @@ MOPS/
 ├── src/mops/
 │   ├── __init__.py       # 版本号
 │   ├── __main__.py       # CLI 入口
-│   ├── protocol.py       # 共享常量 + 日志路径
-│   ├── stats.py          # 流量统计 + ConnectionTracker
+│   ├── protocol.py       # 共享常量 + NodeInfo dataclass
+│   ├── stats/            # 统计模块（按职责拆分）
+│   │   ├── __init__.py   # 重新导出
+│   │   ├── traffic.py    # TrafficStats
+│   │   ├── connection.py # ConnectionTracker
+│   │   ├── registry.py   # NodeRegistry
+│   │   └── history.py    # TrafficHistory
 │   ├── tunnel.py         # 双向流量拷贝
 │   ├── server.py         # TCP 透传 + mDNS + 连接追踪
 │   ├── client.py         # SOCKS5 + HTTP CONNECT + HTTP 代理
 │   ├── discovery.py      # mDNS 服务浏览
 │   ├── scheduler.py      # 负载均衡 + 熔断
-│   ├── api.py            # REST API + 静态文件服务
-│   ├── dashboard.html    # Legacy Dashboard 模板（备用）
+│   ├── api.py            # REST API + 统一 /api/dashboard 响应
+│   ├── web.py            # 共享静态文件服务
 │   ├── static/           # Vite 构建输出（G6 Dashboard）
 │   │   ├── index.html
 │   │   ├── dashboard.js

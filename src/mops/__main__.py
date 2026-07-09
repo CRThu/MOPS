@@ -11,16 +11,18 @@ import sys
 from loguru import logger
 
 from .protocol import (
+    DEFAULT_API_PORT_OFFSET,
     DEFAULT_BASE_PORT,
-    LOG_DIR,
+    DEFAULT_CLIENT_PORT_OFFSET,
     STRATEGY_HASH,
     STRATEGY_RANDOM,
 )
 from .proxy import proxy_off, proxy_on, proxy_status
-from .stats import ConnectionTracker, TrafficStats
 
 
 def _setup_logger(service_mode: bool = False) -> None:
+    from .service import LOG_DIR
+
     logger.remove()
     log_file = LOG_DIR / "mops.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -32,117 +34,96 @@ def _setup_logger(service_mode: bool = False) -> None:
                retention="7 days", format=fmt)
 
 
-def _run_server(base_port: int, weight: int, bind: str = "") -> None:
+def _run_components(
+    mode: str,
+    base_port: int,
+    listen: str,
+    strategy: str,
+    weight: int,
+    bind: str,
+) -> None:
     from .api import MopsApi
-    from .server import MopsServer
-    from .stats import TrafficHistory
+    from .stats import ConnectionTracker, TrafficHistory, TrafficStats
 
-    api_port = base_port + 2
-    stats = TrafficStats()
-    conn_tracker = ConnectionTracker()
-    traffic_history = TrafficHistory()
+    client_port = base_port + DEFAULT_CLIENT_PORT_OFFSET
+    api_port = base_port + DEFAULT_API_PORT_OFFSET
 
-    async def _server():
-        server = MopsServer(port=base_port, weight=weight, bind=bind, stats=stats, conn_tracker=conn_tracker)
-        api = MopsApi(port=api_port, server_stats=stats, mode="server", conn_tracker=conn_tracker, traffic_history=traffic_history)
+    # Create stats objects based on mode
+    server_stats = TrafficStats() if mode in ("server", "both") else None
+    client_stats = TrafficStats() if mode in ("client", "both") else None
+    conn_tracker = ConnectionTracker() if mode in ("server", "both") else None
+    traffic_history = TrafficHistory() if mode in ("server", "both") else None
 
-        async def shutdown():
-            await server.stop()
-            await api.stop()
+    async def _run():
+        from .client import MopsClient
+        from .server import MopsServer
 
-        loop = asyncio.get_event_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(sig, lambda: asyncio.ensure_future(shutdown()))
-            except NotImplementedError:
-                pass
+        server = None
+        client = None
 
-        await api.run()
-        await server.run()
+        if mode in ("server", "both"):
+            server = MopsServer(
+                port=base_port, weight=weight, bind=bind,
+                stats=server_stats, conn_tracker=conn_tracker,
+            )
+        if mode in ("client", "both"):
+            client = MopsClient(
+                listen_port=client_port, listen_host=listen,
+                strategy=strategy, stats=client_stats,
+            )
 
-    asyncio.run(_server())
-
-
-def _run_client(base_port: int, listen: str, strategy: str) -> None:
-    from .api import MopsApi
-    from .client import MopsClient
-
-    client_port = base_port + 1
-    api_port = base_port + 2
-    stats = TrafficStats()
-
-    async def _client():
-        client = MopsClient(
-            listen_port=client_port, listen_host=listen,
-            strategy=strategy, stats=stats,
-        )
-        api = MopsApi(port=api_port, client_stats=stats, mode="client")
-
-        async def shutdown():
-            await client.stop()
-            await api.stop()
-
-        loop = asyncio.get_event_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(sig, lambda: asyncio.ensure_future(shutdown()))
-            except NotImplementedError:
-                pass
-
-        await api.run()
-        await client.run()
-
-    asyncio.run(_client())
-
-
-def _run_both(base_port: int, listen: str, strategy: str, weight: int, bind: str = "") -> None:
-    from .api import MopsApi
-    from .client import MopsClient
-    from .server import MopsServer
-    from .stats import TrafficHistory
-
-    client_port = base_port + 1
-    api_port = base_port + 2
-    server_stats = TrafficStats()
-    client_stats = TrafficStats()
-    conn_tracker = ConnectionTracker()
-    traffic_history = TrafficHistory()
-
-    async def _both():
-        server = MopsServer(port=base_port, weight=weight, bind=bind, stats=server_stats, conn_tracker=conn_tracker)
-        client = MopsClient(
-            listen_port=client_port, listen_host=listen,
-            strategy=strategy, stats=client_stats,
-        )
         api = MopsApi(
             port=api_port,
             server_stats=server_stats,
             client_stats=client_stats,
-            mode="both",
-            strategy=strategy,
-            server_port=base_port,
-            client_listen=listen,
-            client_port=client_port,
             conn_tracker=conn_tracker,
             traffic_history=traffic_history,
+            mode=mode,
+            strategy=strategy,
+            client_listen=listen,
+            client_port=client_port,
         )
 
-        async def shutdown():
-            await server.stop()
-            await client.stop()
-            await api.stop()
+        shutdown_event = asyncio.Event()
 
-        loop = asyncio.get_event_loop()
+        def _signal_handler():
+            shutdown_event.set()
+
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
-                loop.add_signal_handler(sig, lambda: asyncio.ensure_future(shutdown()))
-            except NotImplementedError:
-                pass
+                # Unix: use add_signal_handler
+                loop = asyncio.get_running_loop()
+                loop.add_signal_handler(sig, _signal_handler)
+            except (NotImplementedError, AttributeError):
+                # Windows: use signal.signal (runs in main thread)
+                signal.signal(sig, lambda s, f: _signal_handler())
+
+        async def _shutdown():
+            logger.info("Shutting down...")
+            if server:
+                await server.stop()
+            if client:
+                await client.stop()
+            await api.stop()
 
         await api.run()
-        await asyncio.gather(server.run(), client.run())
 
-    asyncio.run(_both())
+        tasks = []
+        if server:
+            tasks.append(asyncio.create_task(server.run()))
+        if client:
+            tasks.append(asyncio.create_task(client.run()))
+
+        # Wait for shutdown signal
+        await shutdown_event.wait()
+        await _shutdown()
+
+        # Cancel running tasks
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    asyncio.run(_run())
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -151,12 +132,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     mode = args.mode
     bind = getattr(args, "bind", "") or ""
 
-    if mode == "server":
-        _run_server(base_port, args.weight, bind)
-    elif mode == "client":
-        _run_client(base_port, args.listen, args.strategy)
-    else:
-        _run_both(base_port, args.listen, args.strategy, args.weight, bind)
+    _run_components(mode, base_port, args.listen, args.strategy, args.weight, bind)
 
 
 def cmd_install(args: argparse.Namespace) -> None:
@@ -195,6 +171,8 @@ def cmd_status(args: argparse.Namespace) -> None:
 
 
 def cmd_service_log(args: argparse.Namespace) -> None:
+    from .service import LOG_DIR
+
     log_file = LOG_DIR / "mops.log"
     if not log_file.exists():
         print(f"No log file yet: {log_file}")

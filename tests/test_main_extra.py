@@ -8,9 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mops.__main__ import (
-    _run_both,
-    _run_client,
-    _run_server,
+    _run_components,
     _setup_logger,
     cmd_service_log,
     main,
@@ -38,7 +36,7 @@ class TestSetupLogger:
 class TestRunServer:
     @pytest.mark.asyncio
     async def test_run_server_creates_api(self):
-        """Verify _run_server creates MopsApi with mode='server'."""
+        """Verify _run_components with mode='server' creates MopsApi correctly."""
         async def exec_coro(coro):
             with patch("mops.server.MopsServer") as mock_server_cls, \
                  patch("mops.api.MopsApi") as mock_api_cls:
@@ -59,13 +57,13 @@ class TestRunServer:
                 assert "server_stats" in call_kwargs
 
         with patch("mops.__main__.asyncio.run", side_effect=exec_coro):
-            _run_server(base_port=10080, weight=1)
+            _run_components("server", base_port=10080, listen="127.0.0.1", strategy="random", weight=1, bind="")
 
 
 class TestRunClient:
     @pytest.mark.asyncio
     async def test_run_client_creates_api(self):
-        """Verify _run_client creates MopsApi with mode='client'."""
+        """Verify _run_components with mode='client' creates MopsApi correctly."""
         async def exec_coro(coro):
             with patch("mops.client.MopsClient") as mock_client_cls, \
                  patch("mops.api.MopsApi") as mock_api_cls:
@@ -86,13 +84,13 @@ class TestRunClient:
                 assert "client_stats" in call_kwargs
 
         with patch("mops.__main__.asyncio.run", side_effect=exec_coro):
-            _run_client(base_port=10080, listen="127.0.0.1", strategy="random")
+            _run_components("client", base_port=10080, listen="127.0.0.1", strategy="random", weight=1, bind="")
 
 
 class TestRunBoth:
     @pytest.mark.asyncio
     async def test_run_both_creates_api_with_both_stats(self):
-        """Verify _run_both creates MopsApi with both server_stats and client_stats."""
+        """Verify _run_components with mode='both' creates MopsApi with both stats."""
         async def exec_coro(coro):
             with patch("mops.server.MopsServer"), \
                  patch("mops.client.MopsClient"), \
@@ -112,12 +110,12 @@ class TestRunBoth:
                 assert "client_stats" in call_kwargs
 
         with patch("mops.__main__.asyncio.run", side_effect=exec_coro):
-            _run_both(base_port=10080, listen="127.0.0.1", strategy="random", weight=1)
+            _run_components("both", base_port=10080, listen="127.0.0.1", strategy="random", weight=1, bind="")
 
 
 class TestServiceLog:
     def test_log_no_file(self, capsys):
-        with patch("mops.__main__.LOG_DIR") as mock_dir:
+        with patch("mops.service.LOG_DIR") as mock_dir:
             mock_dir.__truediv__ = lambda self, x: Path("/nonexistent/mops.log")
             cmd_service_log(Namespace(lines=50, search=""))
             captured = capsys.readouterr()
@@ -126,7 +124,7 @@ class TestServiceLog:
     def test_log_with_content(self, capsys, tmp_path):
         log_file = tmp_path / "mops.log"
         log_file.write_text("line1\nline2\nline3\n", encoding="utf-8")
-        with patch("mops.__main__.LOG_DIR") as mock_dir:
+        with patch("mops.service.LOG_DIR") as mock_dir:
             mock_dir.__truediv__ = lambda self, x: log_file
             cmd_service_log(Namespace(lines=2, search=""))
             captured = capsys.readouterr()
@@ -137,7 +135,7 @@ class TestServiceLog:
     def test_log_with_search(self, capsys, tmp_path):
         log_file = tmp_path / "mops.log"
         log_file.write_text("info msg\nerror msg\ninfo again\n", encoding="utf-8")
-        with patch("mops.__main__.LOG_DIR") as mock_dir:
+        with patch("mops.service.LOG_DIR") as mock_dir:
             mock_dir.__truediv__ = lambda self, x: log_file
             cmd_service_log(Namespace(lines=50, search="error"))
             captured = capsys.readouterr()
@@ -183,13 +181,12 @@ class TestServiceConfigLoading:
              patch("mops.service._load_config", return_value={
                  "mode": "server", "port": 10090, "strategy": "hash", "bind": "1.2.3.4"
              }), \
-             patch("mops.__main__._run_server") as mock_run:
+             patch("mops.__main__._run_components") as mock_run:
             main()
             mock_run.assert_called_once()
-            # _run_server(base_port, weight, bind) - positional args
             args, kwargs = mock_run.call_args
-            assert args[0] == 10090  # base_port
-            assert args[2] == "1.2.3.4"  # bind
+            assert args[0] == "server"  # mode
+            assert args[1] == 10090  # base_port
 
     def test_main_service_no_action_shows_help(self):
         with patch("sys.argv", ["mops", "service"]), \

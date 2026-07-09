@@ -4,23 +4,10 @@ from __future__ import annotations
 
 import random
 import time
-from dataclasses import dataclass, field
 
 from loguru import logger
 
-from .protocol import MAX_FAILS, RECOVERY_INTERVAL, STRATEGY_HASH, STRATEGY_RANDOM
-
-
-@dataclass
-class NodeInfo:
-    ip: str
-    port: int
-    api_port: int = 0
-    weight: int = 1
-    fails: int = 0
-    name: str = ""
-    hostname: str = ""
-    _last_fail: float = 0.0
+from .protocol import MAX_FAILS, RECOVERY_INTERVAL, STRATEGY_HASH, STRATEGY_RANDOM, NodeInfo
 
 
 class NoAvailableNodeError(Exception):
@@ -60,7 +47,7 @@ class Scheduler:
     def report_fail(self, node: NodeInfo) -> None:
         key = f"{node.ip}:{node.port}"
         self._nodes[key].fails += 1
-        self._nodes[key]._last_fail = time.monotonic()
+        self._nodes[key].last_fail = time.monotonic()
         logger.warning(
             f"Node fail reported: {key} (fails={self._nodes[key].fails})"
         )
@@ -69,7 +56,7 @@ class Scheduler:
         now = time.monotonic()
         for key, node in list(self._nodes.items()):
             if node.fails >= MAX_FAILS:
-                last_fail = node._last_fail
+                last_fail = node.last_fail
                 if now - last_fail >= RECOVERY_INTERVAL:
                     node.fails = 0
                     logger.info(f"Node recovered: {key}")

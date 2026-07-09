@@ -62,7 +62,7 @@ class MopsClient:
             writer.close()
             try:
                 await writer.wait_closed()
-            except RuntimeError:
+            except (ConnectionError, OSError, RuntimeError):
                 pass
 
     async def _handle_socks5(

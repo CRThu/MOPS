@@ -10,7 +10,9 @@ from zeroconf import ServiceInfo, Zeroconf
 
 from .protocol import (
     BUFFER_SIZE,
+    DEFAULT_API_PORT_OFFSET,
     MOPS_SERVICE_TYPE,
+    SERVICE_NAME_PREFIX,
     parse_header,
 )
 from .tunnel import tunnel
@@ -30,7 +32,7 @@ class MdnsBroadcaster:
         import socket
 
         hostname = socket.gethostname()
-        service_name = f"mops-server-{hostname}-{port}.{MOPS_SERVICE_TYPE}"
+        service_name = f"{SERVICE_NAME_PREFIX}{hostname}-{port}.{MOPS_SERVICE_TYPE}"
 
         if bind:
             # User specified bind address
@@ -41,7 +43,7 @@ class MdnsBroadcaster:
 
         self._zc = Zeroconf()
 
-        api_port = port + 2
+        api_port = port + DEFAULT_API_PORT_OFFSET
         properties = {
             b"weight": str(weight).encode(),
             b"version": b"0.1.0",
@@ -126,6 +128,7 @@ class MopsServer:
         logger.debug(f"New connection from {peer}")
 
         conn_id: str | None = None
+        target_writer: asyncio.StreamWriter | None = None
         try:
             header = await reader.readline()
             if not header:
@@ -156,10 +159,16 @@ class MopsServer:
         finally:
             if self._conn_tracker and conn_id:
                 self._conn_tracker.end(conn_id)
+            if target_writer:
+                target_writer.close()
+                try:
+                    await target_writer.wait_closed()
+                except (ConnectionError, OSError, RuntimeError):
+                    pass
             writer.close()
             try:
                 await writer.wait_closed()
-            except RuntimeError:
+            except (ConnectionError, OSError, RuntimeError):
                 pass
 
     async def run(self) -> None:
