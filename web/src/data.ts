@@ -86,6 +86,40 @@ export function toTopo(status: DashboardStatus): TopoData {
       edges.push({ id: `e-cli-${srvId}`, source: clientId, target: srvId, isActive: false })
       edges.push({ id: `e-${srvId}-inet`, source: srvId, target: 'inet', isActive: false })
     }
+
+    // Remote clients from connections
+    const remoteClients = new Map<string, { hostname: string; servers: Set<string> }>()
+    for (const conn of status.connections) {
+      if (!conn.server_node) continue
+      const key = `${conn.client_ip}:${conn.client_port || 0}`
+      if (key === `${localClient.ip}:${localClient.port}`) continue // skip local
+      if (!remoteClients.has(key)) {
+        remoteClients.set(key, { hostname: conn.client_host || '', servers: new Set() })
+      }
+      remoteClients.get(key)!.servers.add(conn.server_node)
+    }
+    for (const [clientKey, info] of remoteClients) {
+      const [cIp, cPort] = clientKey.split(':')
+      const cId = `cli-${clientKey}`
+      nodes.push({
+        id: cId,
+        type: 'client',
+        label: info.hostname ? `${info.hostname}:${cPort}` : `Client :${cPort}`,
+        ip: cIp,
+        port: parseInt(cPort, 10) || undefined,
+      })
+      for (const srvKey of info.servers) {
+        const srvId = `srv-${srvKey}`
+        const srv = servers.find(s => `${s.ip}:${s.port}` === srvKey)
+        edges.push({
+          id: `e-${cId}-${srvId}`,
+          source: cId,
+          target: srvId,
+          isActive: srv ? srv.status === 'active' : false,
+          speed: srv ? srv.speed_up + srv.speed_down : 0,
+        })
+      }
+    }
   } else {
     // Standalone mode: no App node
     // Collect client info: hostname + connected servers
