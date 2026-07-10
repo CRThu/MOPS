@@ -57,7 +57,8 @@ class TestRunServer:
                 assert "server_stats" in call_kwargs
 
         with patch("mops.__main__.asyncio.run", side_effect=exec_coro):
-            _run_components("server", base_port=10080, listen="127.0.0.1", strategy="random", weight=1, bind="")
+            _run_components("server", server_port=10080, client_port=10081, api_port=10082,
+                            listen="127.0.0.1", advertise="", strategy="random", weight=1)
 
 
 class TestRunClient:
@@ -84,7 +85,8 @@ class TestRunClient:
                 assert "client_stats" in call_kwargs
 
         with patch("mops.__main__.asyncio.run", side_effect=exec_coro):
-            _run_components("client", base_port=10080, listen="127.0.0.1", strategy="random", weight=1, bind="")
+            _run_components("client", server_port=10080, client_port=10081, api_port=10082,
+                            listen="127.0.0.1", advertise="", strategy="random", weight=1)
 
 
 class TestRunBoth:
@@ -110,7 +112,8 @@ class TestRunBoth:
                 assert "client_stats" in call_kwargs
 
         with patch("mops.__main__.asyncio.run", side_effect=exec_coro):
-            _run_components("both", base_port=10080, listen="127.0.0.1", strategy="random", weight=1, bind="")
+            _run_components("both", server_port=10080, client_port=10081, api_port=10082,
+                            listen="127.0.0.1", advertise="", strategy="random", weight=1)
 
 
 class TestServiceLog:
@@ -170,30 +173,31 @@ class TestCmdDashboard:
             mock_inst = AsyncMock()
             mock_cls.return_value = mock_inst
             with patch("mops.__main__.asyncio.run") as mock_run:
-                cmd_dashboard(Namespace(port=10082, service=False))
-                mock_cls.assert_called_once_with(port=10082)
+                cmd_dashboard(Namespace(port=10100))
+                mock_cls.assert_called_once_with(port=10100)
                 mock_run.assert_called_once()
 
 
-class TestServiceConfigLoading:
-    def test_main_service_mode_loads_config(self):
-        with patch("sys.argv", ["mops", "run", "--service"]), \
-             patch("mops.service._load_config", return_value={
-                 "mode": "server", "port": 10090, "strategy": "hash", "bind": "1.2.3.4"
+class TestConfigLoading:
+    def test_main_with_config_file(self):
+        with patch("sys.argv", ["mops", "run", "-c", "test.json"]), \
+             patch("mops.__main__._load_config_file", return_value={
+                 "mode": "server", "server_port": 20080, "client_port": 20090,
+                 "api_port": 20100, "strategy": "hash",
              }), \
              patch("mops.__main__._run_components") as mock_run:
             main()
             mock_run.assert_called_once()
-            args, kwargs = mock_run.call_args
-            assert args[0] == "server"  # mode
-            assert args[1] == 10090  # base_port
+            call_kwargs = mock_run.call_args[1]
+            assert call_kwargs["mode"] == "server"
+            assert call_kwargs["server_port"] == 20080
 
     def test_main_service_no_action_shows_help(self):
         with patch("sys.argv", ["mops", "service"]), \
              patch("mops.__main__.build_parser") as mock_build:
             mock_parser = MagicMock()
             mock_build.return_value = mock_parser
-            mock_args = Namespace(command="service", service_action=None, service=False)
+            mock_args = Namespace(command="service", service_action=None)
             mock_parser.parse_args.return_value = mock_args
             with pytest.raises(SystemExit):
                 main()
@@ -203,7 +207,22 @@ class TestServiceConfigLoading:
              patch("mops.__main__.build_parser") as mock_build:
             mock_parser = MagicMock()
             mock_build.return_value = mock_parser
-            mock_args = Namespace(command="proxy", proxy_action=None, service=False)
+            mock_args = Namespace(command="proxy", proxy_action=None)
             mock_parser.parse_args.return_value = mock_args
             with pytest.raises(SystemExit):
                 main()
+
+    def test_apply_config_overrides_defaults(self):
+        from mops.__main__ import _apply_config
+        from argparse import Namespace
+        # Args start as None (as argparse now does with None defaults)
+        args = Namespace(mode=None, server_port=None, client_port=None, api_port=None,
+                        listen=None, advertise=None, strategy=None, weight=None)
+        cfg = {"mode": "server", "server_port": 20080, "strategy": "hash"}
+        _apply_config(args, cfg)
+        assert args.mode == "server"
+        assert args.server_port == 20080
+        assert args.strategy == "hash"
+        # Unchanged fields remain None (will be filled by _apply_defaults later)
+        assert args.client_port is None
+        assert args.listen is None

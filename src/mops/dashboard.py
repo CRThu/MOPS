@@ -10,7 +10,7 @@ from aiohttp import web
 from loguru import logger
 
 from .discovery import NodeDiscovery
-from .protocol import DEFAULT_BASE_PORT, MAX_FAILS, MOPS_SERVICE_TYPE, NodeInfo
+from .protocol import DEFAULT_DASHBOARD_PORT, MAX_FAILS, MOPS_SERVICE_TYPE, NodeInfo
 from .scheduler import Scheduler
 from .stats import NodeRegistry, TrafficHistory
 from .web import serve_index, setup_static_routes
@@ -19,7 +19,7 @@ from .web import serve_index, setup_static_routes
 class MopsDashboard:
     """Standalone dashboard that discovers servers via mDNS and queries their APIs."""
 
-    def __init__(self, port: int = 10082) -> None:
+    def __init__(self, port: int = DEFAULT_DASHBOARD_PORT) -> None:
         self.port = port
         self._scheduler = Scheduler()
         self._registry = NodeRegistry()
@@ -152,6 +152,13 @@ class MopsDashboard:
 
         speed_up, speed_down = self._history.compute_speed()
 
+        # Extract local_client from first server that reports it (both mode)
+        local_client = None
+        for data in self._cache.values():
+            if data.get("local_client"):
+                local_client = data["local_client"]
+                break
+
         return {
             "nodes": nodes,
             "connections": connections,
@@ -163,7 +170,7 @@ class MopsDashboard:
             "uptime": time.monotonic() - self._start_time,
             "mode": "dashboard",
             "strategy": "mDNS",
-            "local_client": None,
+            "local_client": local_client,
         }
 
     async def _handle_status(self, request: web.Request) -> web.Response:

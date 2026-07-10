@@ -10,7 +10,12 @@ from pathlib import Path
 
 from loguru import logger
 
-from .protocol import DEFAULT_BASE_PORT, STRATEGY_RANDOM
+from .protocol import (
+    DEFAULT_API_PORT,
+    DEFAULT_SERVER_PORT,
+    DEFAULT_CLIENT_PORT,
+    STRATEGY_RANDOM,
+)
 
 LOG_DIR = Path.home() / ".mops" / "logs"
 
@@ -39,18 +44,44 @@ def _run_cmd(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
 
 def _save_config(
     mode: str = "both",
-    port: int = DEFAULT_BASE_PORT,
+    server_port: int = DEFAULT_SERVER_PORT,
+    client_port: int = DEFAULT_CLIENT_PORT,
+    api_port: int = DEFAULT_API_PORT,
+    listen: str = "127.0.0.1",
+    advertise: str = "",
     strategy: str = STRATEGY_RANDOM,
-    bind: str = "",
+    weight: int = 1,
 ) -> None:
     _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    _CONFIG_FILE.write_text(json.dumps({"mode": mode, "port": port, "strategy": strategy, "bind": bind}))
+    cfg = {
+        "mode": mode,
+        "server_port": server_port,
+        "client_port": client_port,
+        "api_port": api_port,
+        "listen": listen,
+        "advertise": advertise,
+        "strategy": strategy,
+        "weight": weight,
+    }
+    _CONFIG_FILE.write_text(json.dumps(cfg))
 
 
 def _load_config() -> dict:
+    defaults = {
+        "mode": "both",
+        "server_port": DEFAULT_SERVER_PORT,
+        "client_port": DEFAULT_CLIENT_PORT,
+        "api_port": DEFAULT_API_PORT,
+        "listen": "127.0.0.1",
+        "advertise": "",
+        "strategy": STRATEGY_RANDOM,
+        "weight": 1,
+    }
     if _CONFIG_FILE.exists():
-        return json.loads(_CONFIG_FILE.read_text())
-    return {"mode": "both", "port": DEFAULT_BASE_PORT, "strategy": STRATEGY_RANDOM, "bind": ""}
+        cfg = json.loads(_CONFIG_FILE.read_text())
+        defaults.update(cfg)
+        return defaults
+    return defaults
 
 
 # ── Public API ──
@@ -76,13 +107,21 @@ def uninstall() -> None:
 
 def start(
     mode: str = "both",
-    port: int = DEFAULT_BASE_PORT,
+    server_port: int = DEFAULT_SERVER_PORT,
+    client_port: int = DEFAULT_CLIENT_PORT,
+    api_port: int = DEFAULT_API_PORT,
+    listen: str = "127.0.0.1",
+    advertise: str = "",
     strategy: str = STRATEGY_RANDOM,
-    bind: str = "",
+    weight: int = 1,
 ) -> None:
     """Start the MOPS service with runtime params."""
-    _save_config(mode=mode, port=port, strategy=strategy, bind=bind)
-    logger.info(f"Config saved (mode={mode}, port={port}, strategy={strategy}, bind={bind!r})")
+    _save_config(
+        mode=mode, server_port=server_port, client_port=client_port,
+        api_port=api_port, listen=listen, advertise=advertise,
+        strategy=strategy, weight=weight,
+    )
+    logger.info(f"Config saved (mode={mode}, server_port={server_port}, client_port={client_port}, api_port={api_port})")
     if sys.platform == "win32":
         _run_cmd(["sc", "start", "MOPS"])
     else:
@@ -112,7 +151,8 @@ def status() -> dict:
 
 def _install_windows() -> None:
     exe = _get_exe_path()
-    bin_path = f"{exe} run --service"
+    config_path = str(_CONFIG_FILE)
+    bin_path = f"{exe} run -c {config_path}"
     _run_cmd([
         "sc", "create", "MOPS",
         f"binPath= {bin_path}",
@@ -143,7 +183,7 @@ UNIT_CONTENT = textwrap.dedent("""\
 
     [Service]
     Type=simple
-    ExecStart={exe} run --service
+    ExecStart={exe} run -c {config_path}
     Restart=on-failure
     RestartSec=5
 
@@ -154,7 +194,8 @@ UNIT_CONTENT = textwrap.dedent("""\
 
 def _install_linux() -> None:
     exe = _get_exe_path()
-    content = UNIT_CONTENT.format(exe=exe)
+    config_path = str(_CONFIG_FILE)
+    content = UNIT_CONTENT.format(exe=exe, config_path=config_path)
     unit_path = _SERVICE_DIR / "mops.service"
     unit_path.write_text(content)
     _run_cmd(["systemctl", "daemon-reload"])

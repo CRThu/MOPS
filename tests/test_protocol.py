@@ -6,7 +6,10 @@ import pytest
 
 from mops.protocol import (
     BUFFER_SIZE,
-    DEFAULT_BASE_PORT,
+    DEFAULT_API_PORT,
+    DEFAULT_CLIENT_PORT,
+    DEFAULT_DASHBOARD_PORT,
+    DEFAULT_SERVER_PORT,
     MDNS_TTL,
     MAX_FAILS,
     MOPS_SERVICE_TYPE,
@@ -22,7 +25,10 @@ from mops.protocol import (
 
 
 def test_constants_values():
-    assert DEFAULT_BASE_PORT == 10080
+    assert DEFAULT_SERVER_PORT == 10080
+    assert DEFAULT_CLIENT_PORT == 10081
+    assert DEFAULT_API_PORT == 10082
+    assert DEFAULT_DASHBOARD_PORT == 10100
     assert MDNS_TTL == 60
     assert MAX_FAILS == 2
     assert RECOVERY_INTERVAL == 30

@@ -68,15 +68,24 @@ class TestConfig:
         config_file = tmp_path / "config.json"
         with patch("mops.service._CONFIG_FILE", config_file), \
              patch("mops.service._CONFIG_DIR", tmp_path):
-            _save_config(mode="server", port=20080, strategy="hash")
+            _save_config(mode="server", server_port=20080, client_port=20090,
+                         api_port=20100, strategy="hash")
             cfg = _load_config()
-            assert cfg == {"mode": "server", "port": 20080, "strategy": "hash", "bind": ""}
+            assert cfg["mode"] == "server"
+            assert cfg["server_port"] == 20080
+            assert cfg["client_port"] == 20090
+            assert cfg["api_port"] == 20100
+            assert cfg["strategy"] == "hash"
 
     def test_load_defaults(self, tmp_path):
         config_file = tmp_path / "nonexistent.json"
         with patch("mops.service._CONFIG_FILE", config_file):
             cfg = _load_config()
-            assert cfg == {"mode": "both", "port": 10080, "strategy": "random", "bind": ""}
+            assert cfg["mode"] == "both"
+            assert cfg["server_port"] == 10080
+            assert cfg["client_port"] == 10081
+            assert cfg["api_port"] == 10082
+            assert cfg["strategy"] == "random"
 
 
 class TestInstall:
@@ -143,8 +152,8 @@ class TestStartStop:
         with patch("sys.platform", "linux"), \
              patch("mops.service._save_config") as mock_save, \
              patch("subprocess.run", return_value=mock_result) as mock_run:
-            start(mode="both", port=10080, strategy="random")
-            mock_save.assert_called_once_with(mode="both", port=10080, strategy="random", bind="")
+            start(mode="both", server_port=10080, client_port=10081, api_port=10082, strategy="random")
+            mock_save.assert_called_once()
             calls = mock_run.call_args_list
             assert any("start" in str(c) for c in calls)
 
@@ -155,8 +164,8 @@ class TestStartStop:
         with patch("sys.platform", "win32"), \
              patch("mops.service._save_config") as mock_save, \
              patch("subprocess.run", return_value=mock_result) as mock_run:
-            start(mode="server", port=20080, strategy="hash")
-            mock_save.assert_called_once_with(mode="server", port=20080, strategy="hash", bind="")
+            start(mode="server", server_port=20080, client_port=20090, api_port=20100, strategy="hash")
+            mock_save.assert_called_once()
             calls = mock_run.call_args_list
             assert any("sc" in str(c) for c in calls)
 

@@ -50,14 +50,17 @@ Client 启动后，默认监听 `127.0.0.1:10081`，自动发现局域网内的 
 
 ```bash
 mops                                              # 默认 both 模式启动
-mops run        [server|client|both] [--port 10080] [--strategy random|hash] [--listen 127.0.0.1] [--weight 1] [--bind <ip>]
-mops service install                              # 注册服务（无运行时参数）
-mops service start   [--mode both] [--port 10080] [--strategy random] [--bind <ip>]
+mops run        [--mode both] [--server-port 10080] [--client-port 10081] [--api-port 10082]
+                 [--strategy random|hash] [--listen 127.0.0.1] [--weight 1] [--advertise <ip>]
+                 [-c config.json]
+mops service install                              # 注册服务
+mops service start   [同 run 的参数] [-c config.json]
 mops service stop                                  # 停止服务
 mops service status                                # 查看服务状态
 mops service uninstall                             # 卸载服务
 mops service log    [-n 50] [-s keyword]           # 查看日志
-mops proxy on     [--port 10081]                   # 设置系统全局代理
+mops dashboard     [--port 10100] [-c config.json] # 独立 Dashboard
+mops proxy on      [--port 10081]                  # 设置系统全局代理
 mops proxy off                                     # 取消系统全局代理
 mops proxy status                                  # 查看代理状态
 ```
@@ -66,20 +69,47 @@ mops proxy status                                  # 查看代理状态
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `--port` | 基础端口，所有端口从此衍生 | `10080` |
+| `--mode` | 运行模式: `server` / `client` / `both` | `both` |
+| `--server-port` | Server TCP 监听端口 | `10080` |
+| `--client-port` | Client 代理监听端口 | `10081` |
+| `--api-port` | REST API 监听端口 | `10082` |
+| `--listen` | Client 本地绑定地址 | `127.0.0.1` |
+| `--advertise` | mDNS 广播地址（通过路由表自动检测） | `auto` |
 | `--strategy` | 负载均衡策略: `random` 或 `hash` | `random` |
 | `--weight` | Server 权重 (仅 server 模式) | `1` |
-| `--listen` | Client 监听地址 | `127.0.0.1` |
-| `--bind` | mDNS 广播的 IP 地址（通过路由表自动检测） | `auto` |
-| `--mode` | 运行模式: `server` / `client` / `both` | `both` |
+| `-c, --config` | 从 JSON 配置文件加载参数 | — |
 
 ### 端口分配
 
-| 组件 | 端口 |
-|------|------|
-| Server TCP | `base_port` (默认 10080) |
-| Client 代理 | `base_port + 1` (默认 10081) |
-| REST API | `base_port + 2` (默认 10082) |
+| 组件 | 参数 | 默认端口 |
+|------|------|----------|
+| Server TCP | `--server-port` | 10080 |
+| Client 代理 | `--client-port` | 10081 |
+| REST API | `--api-port` | 10082 |
+| Dashboard | `dashboard --port` | 10100 |
+
+### 配置文件
+
+```bash
+mops run -c config.json               # 从文件加载所有参数
+mops run -c config.json --strategy hash  # 文件 + 参数覆盖
+```
+
+配置文件格式（JSON）：
+```json
+{
+  "mode": "both",
+  "server_port": 10080,
+  "client_port": 10090,
+  "api_port": 10100,
+  "listen": "127.0.0.1",
+  "advertise": "",
+  "strategy": "random",
+  "weight": 1
+}
+```
+
+合并优先级：CLI 参数 > `-c` 文件 > 默认值
 
 ## 代理协议
 
@@ -224,7 +254,7 @@ prepend:
 
 ```bash
 uv run python -m mops service install
-uv run python -m mops service start --mode both --port 10080 --bind 192.168.1.100
+uv run python -m mops service start --mode both --server-port 10080 --client-port 10090 --api-port 10100 --advertise 192.168.1.100
 uv run python -m mops service status
 uv run python -m mops service stop
 uv run python -m mops service uninstall
@@ -234,7 +264,7 @@ uv run python -m mops service uninstall
 
 ```powershell
 uv run python -m mops service install
-uv run python -m mops service start --mode both --port 10080 --bind 192.168.1.100
+uv run python -m mops service start --mode both --server-port 10080 --client-port 10090 --api-port 10100 --advertise 192.168.1.100
 uv run python -m mops service status
 uv run python -m mops service stop
 uv run python -m mops service uninstall

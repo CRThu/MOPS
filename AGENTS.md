@@ -100,18 +100,29 @@ Dashboard 使用 NodeRegistry 跟踪所有发现的节点：
 ## CLI 结构
 
 ```
-mops run [server|client|both] [--port 10080] [--bind <ip>]  # 前台运行
-mops dashboard [--port 10082]                               # 独立 Dashboard
-mops service install                           # 注册服务（无运行时参数）
-mops service start [--mode both] [--port 10080] [--strategy random] [--bind <ip>]
-mops service uninstall/stop/status/log         # 其他服务管理
-mops proxy on/off/status                       # 系统代理
+mops run [options]                                  # 前台运行
+  --mode {server,client,both}                       # 运行模式（默认 both）
+  --server-port INT                                 # Server TCP 端口（默认 10080）
+  --client-port INT                                 # Client 代理端口（默认 10081）
+  --api-port INT                                    # REST API 端口（默认 10082）
+  --listen HOST                                     # Client 监听地址（默认 127.0.0.1）
+  --advertise HOST                                  # mDNS 广播地址（默认自动检测）
+  --strategy {random,hash}                          # 负载均衡策略（默认 random）
+  --weight INT                                      # Server 权重（默认 1）
+  -c, --config PATH                                 # 从配置文件加载参数
+
+mops dashboard [--port 10100] [-c config.json]      # 独立 Dashboard
+mops service install                                # 注册服务
+mops service start [同 run 的参数] [-c config.json]   # 启动服务
+mops service uninstall/stop/status/log              # 其他服务管理
+mops proxy on [--port 10081]                        # 设置系统代理
+mops proxy off/status                               # 取消/查看代理
 ```
 
 ### mDNS IP 检测
 
 - 默认通过 UDP 连 `8.8.8.8` 获取路由表实际出口网卡 IP
-- `--bind` 可手动覆盖（适用于多网卡或容器环境）
+- `--advertise` 可手动覆盖（适用于多网卡或容器环境）
 
 ## API 端点
 
@@ -125,22 +136,32 @@ mops proxy on/off/status                       # 系统代理
 ## 后台启动方式（Windows）
 
 ```powershell
-# 推荐: Start-Job（异步不阻塞）
-Start-Job { uv run python -m mops run server --port 10080 --bind 127.0.0.1 }
-Start-Job { uv run python -m mops run client --port 10090 --listen 127.0.0.1 }
-Start-Job { uv run python -m mops dashboard --port 10100 }
+# uv 路径（按需替换）
+$uv = "C:\Users\$env:USERNAME\.local\bin\uv.exe"
+$logDir = $env:TEMP
 
-# 多实例示例（both 模式: server + client）
-Start-Job { uv run python -m mops run both --port 10080 --listen 127.0.0.1 }
-Start-Job { uv run python -m mops run both --port 10083 --listen 127.0.0.1 }
-Start-Job { uv run python -m mops run both --port 10086 --listen 127.0.0.1 }
+# 推荐: cmd /c + WindowStyle Hidden（管道重定向在 cmd 内部完成，不阻塞）
+# ⚠️ 禁止用 Start-Process -NoNewWindow + -RedirectStandardOutput/Err
+#    PowerShell 的 Redirect 参数创建管道，子进程写满缓冲区后会阻塞
+
+# Dashboard
+Start-Process cmd -ArgumentList "/c","$uv run python -m mops dashboard --port 10100 >`"$logDir\mops-dash.log`" 2>&1" -WindowStyle Hidden
+
+# 单实例（both 模式: server + client）
+Start-Process cmd -ArgumentList "/c","$uv run python -m mops run --mode both --server-port 10080 --client-port 10090 --api-port 10082 --listen 127.0.0.1 >`"$logDir\mops-inst1.log`" 2>&1" -WindowStyle Hidden
+
+# 多实例示例
+Start-Process cmd -ArgumentList "/c","$uv run python -m mops run --mode both --server-port 20080 --client-port 20090 --api-port 20082 --listen 127.0.0.1 >`"$logDir\mops-inst2.log`" 2>&1" -WindowStyle Hidden
 ```
 
-- 端口分配规则：Server TCP=base_port, API=base_port+2；Client 同理
-- 多实例需避开端口冲突，建议 Server 用 10080/10083/10086，Client 用 10090/10091/10094
+- `cmd /c "... >file 2>&1" -WindowStyle Hidden`：重定向在 cmd 内部完成，PowerShell 不持有管道，子进程不会阻塞
+- `-WindowStyle Hidden` 隐藏窗口，不弹出 cmd 黑框
+- 不要在进程运行时用 `Get-Content` 读日志文件（会阻塞），等进程退出后再读
+- 每个实例需独立指定 server-port / client-port / api-port，避免端口冲突
 - 验证启动：`netstat -aon | Select-String "1008"` 检查端口监听
-- 查看 Job 输出：`Get-Job | Receive-Job`
-- 不要使用 `Start-Process -WindowStyle Hidden` — 与 `uv run` 组合会阻塞
+- 查看日志：`Get-Content $env:TEMP\mops-*.log`
+- 停止所有：`Get-Process python, uv | Stop-Process -Force`
+- 不要用 `Start-Job` 运行长期外部进程——其 PowerShell 子进程退出时会杀子进程树
 
 ## 开发约定
 
@@ -152,9 +173,9 @@ Start-Job { uv run python -m mops run both --port 10086 --listen 127.0.0.1 }
 - 前端构建：`cd web && bun run build`（输出到 src/mops/static/）
 - 打包：`uv run python build.py` (Nuitka)
 - Python 3.12+, asyncio 原生协程，禁止多线程/多进程（ConnectionTracker/NodeRegistry 保留 threading.Lock 因为 zeroconf 回调在后台线程）
-- Python 测试覆盖率：237 个测试，目标 ≥85%
+- Python 测试覆盖率：243 个测试，目标 ≥85%
 - CI/CD：`.github/workflows/ci.yml`（Python 测试 + Vitest + Playwright + 构建验证）
-- 服务模式：`--service` 标志启用（隐藏），无交互式输出，适合 systemd/sc 后台运行
+- 服务模式：通过 `-c/--config` 传入配置文件，OS 服务启动时自动加载
 
 ## 目录结构
 
@@ -198,7 +219,7 @@ MOPS/
 │       ├── format.test.ts   # 格式化测试 (11)
 │       ├── toTopo.test.ts   # 数据转换测试 (7)
 │       └── graph.test.ts    # Graph 模块测试 (7)
-├── tests/              # 测试 (237 个)
+├── tests/              # 测试 (243 个)
 ├── .github/workflows/ci.yml  # CI/CD 流水线
 ├── pyproject.toml      # 项目配置 (hatchling)
 ├── build.py            # Nuitka 打包脚本

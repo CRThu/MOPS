@@ -6,7 +6,7 @@ import re
 
 from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
 
-from .protocol import MOPS_SERVICE_TYPE, SERVICE_NAME_PREFIX, NodeInfo
+from .protocol import DEFAULT_API_PORT, MOPS_SERVICE_TYPE, SERVICE_NAME_PREFIX, NodeInfo
 from .scheduler import Scheduler
 
 # Type hint for NodeRegistry to avoid circular imports
@@ -51,7 +51,7 @@ class NodeDiscovery(ServiceListener):
         ip = self._extract_ip(info)
         port = info.port
         weight = 1
-        api_port = port + 2  # default: base_port + 2
+        api_port = DEFAULT_API_PORT
         hostname = ""
 
         if info.properties:
@@ -66,7 +66,7 @@ class NodeDiscovery(ServiceListener):
                 try:
                     api_port = int(api_port_bytes)
                 except (ValueError, TypeError):
-                    api_port = port + 2
+                    api_port = DEFAULT_API_PORT
 
         # Extract hostname from service name:
         # mops-server-{hostname}-{port}._mops-proxy._tcp.local.

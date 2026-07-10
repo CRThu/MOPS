@@ -4,36 +4,56 @@ from unittest.mock import patch
 
 import pytest
 
-from mops.__main__ import build_parser, main
+from mops.__main__ import build_parser, main, _apply_defaults
 
 
 class TestBuildParser:
     def test_run_subcommand(self):
         parser = build_parser()
         args = parser.parse_args(["run"])
+        _apply_defaults(args)
         assert args.command == "run"
         assert args.mode == "both"
-        assert args.port == 10080
+        assert args.server_port == 10080
+        assert args.client_port == 10081
+        assert args.api_port == 10082
         assert args.strategy == "random"
         assert args.weight == 1
 
     def test_run_server_mode(self):
         parser = build_parser()
-        args = parser.parse_args(["run", "server"])
+        args = parser.parse_args(["run", "--mode", "server"])
         assert args.mode == "server"
 
     def test_run_client_mode(self):
         parser = build_parser()
-        args = parser.parse_args(["run", "client", "--listen", "0.0.0.0", "--port", "20080"])
+        args = parser.parse_args(["run", "--mode", "client", "--listen", "0.0.0.0", "--client-port", "10090"])
         assert args.mode == "client"
         assert args.listen == "0.0.0.0"
-        assert args.port == 20080
+        assert args.client_port == 10090
 
     def test_run_both_mode(self):
         parser = build_parser()
-        args = parser.parse_args(["run", "both", "--strategy", "hash"])
+        args = parser.parse_args(["run", "--mode", "both", "--strategy", "hash"])
         assert args.mode == "both"
         assert args.strategy == "hash"
+
+    def test_run_explicit_ports(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "--server-port", "20080", "--client-port", "20090", "--api-port", "20100"])
+        assert args.server_port == 20080
+        assert args.client_port == 20090
+        assert args.api_port == 20100
+
+    def test_run_advertise(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "--advertise", "192.168.1.5"])
+        assert args.advertise == "192.168.1.5"
+
+    def test_run_config_file(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "-c", "config.json"])
+        assert args.config == "config.json"
 
     def test_service_install_subcommand(self):
         parser = build_parser()
@@ -49,18 +69,21 @@ class TestBuildParser:
 
     def test_service_start_subcommand(self):
         parser = build_parser()
-        args = parser.parse_args(["service", "start", "--mode", "server", "--port", "30080", "--strategy", "hash"])
+        args = parser.parse_args(["service", "start", "--mode", "server", "--server-port", "30080", "--strategy", "hash"])
         assert args.command == "service"
         assert args.service_action == "start"
         assert args.mode == "server"
-        assert args.port == 30080
+        assert args.server_port == 30080
         assert args.strategy == "hash"
 
     def test_service_start_subcommand_defaults(self):
         parser = build_parser()
         args = parser.parse_args(["service", "start"])
+        _apply_defaults(args)
         assert args.mode == "both"
-        assert args.port == 10080
+        assert args.server_port == 10080
+        assert args.client_port == 10081
+        assert args.api_port == 10082
         assert args.strategy == "random"
 
     def test_service_stop_subcommand(self):
@@ -94,7 +117,7 @@ class TestBuildParser:
         args = parser.parse_args(["proxy", "on"])
         assert args.command == "proxy"
         assert args.proxy_action == "on"
-        assert args.port == 10081
+        assert args.port == 10081  # default from DEFAULT_CLIENT_PORT
 
     def test_proxy_on_custom_port(self):
         parser = build_parser()
@@ -113,9 +136,20 @@ class TestBuildParser:
         assert args.command == "proxy"
         assert args.proxy_action == "status"
 
+    def test_dashboard_subcommand(self):
+        parser = build_parser()
+        args = parser.parse_args(["dashboard"])
+        assert args.command == "dashboard"
+        assert args.port == 10100  # default from DEFAULT_DASHBOARD_PORT
+
+    def test_dashboard_custom_port(self):
+        parser = build_parser()
+        args = parser.parse_args(["dashboard", "--port", "8080"])
+        assert args.port == 8080
+
 
 class TestMain:
-    def test_no_command_defaults_to_run_both(self):
+    def test_no_command_defaults_to_run(self):
         with patch("sys.argv", ["mops"]), \
              patch("mops.__main__.cmd_run") as mock_cmd:
             main()
@@ -128,7 +162,7 @@ class TestMain:
             mock_cmd.assert_called_once()
 
     def test_run_server_command(self):
-        with patch("sys.argv", ["mops", "run", "server"]), \
+        with patch("sys.argv", ["mops", "run", "--mode", "server"]), \
              patch("mops.__main__.cmd_run") as mock_cmd:
             main()
             mock_cmd.assert_called_once()
@@ -193,7 +227,8 @@ class TestCmdFunctions:
     def test_cmd_run_both(self, mock_run):
         from mops.__main__ import cmd_run
         from argparse import Namespace
-        args = Namespace(mode="both", port=10080, strategy="random", service=False, listen="127.0.0.1", weight=1, bind="")
+        args = Namespace(mode="both", server_port=10080, client_port=10081, api_port=10082,
+                        strategy="random", listen="127.0.0.1", weight=1, advertise="")
         cmd_run(args)
         mock_run.assert_called_once()
 
@@ -201,7 +236,8 @@ class TestCmdFunctions:
     def test_cmd_run_server(self, mock_run):
         from mops.__main__ import cmd_run
         from argparse import Namespace
-        args = Namespace(mode="server", port=10080, strategy="random", service=False, listen="127.0.0.1", weight=1, bind="")
+        args = Namespace(mode="server", server_port=10080, client_port=10081, api_port=10082,
+                        strategy="random", listen="127.0.0.1", weight=1, advertise="")
         cmd_run(args)
         mock_run.assert_called_once()
 
@@ -209,7 +245,8 @@ class TestCmdFunctions:
     def test_cmd_run_client(self, mock_run):
         from mops.__main__ import cmd_run
         from argparse import Namespace
-        args = Namespace(mode="client", port=10080, strategy="random", service=False, listen="127.0.0.1", weight=1, bind="")
+        args = Namespace(mode="client", server_port=10080, client_port=10081, api_port=10082,
+                        strategy="random", listen="127.0.0.1", weight=1, advertise="")
         cmd_run(args)
         mock_run.assert_called_once()
 
@@ -231,10 +268,14 @@ class TestCmdFunctions:
     def test_cmd_start(self):
         from mops.__main__ import cmd_start
         from argparse import Namespace
-        args = Namespace(mode="both", port=10080, strategy="random", bind="")
+        args = Namespace(mode="both", server_port=10080, client_port=10081, api_port=10082,
+                        strategy="random", listen="127.0.0.1", weight=1, advertise="")
         with patch("mops.service.start") as mock_start:
             cmd_start(args)
-            mock_start.assert_called_once_with(mode="both", port=10080, strategy="random", bind="")
+            mock_start.assert_called_once_with(
+                mode="both", server_port=10080, client_port=10081, api_port=10082,
+                strategy="random", listen="127.0.0.1", weight=1, advertise="",
+            )
 
     def test_cmd_stop(self):
         from mops.__main__ import cmd_stop

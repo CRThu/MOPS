@@ -7,13 +7,15 @@ import asyncio
 import json
 import signal
 import sys
+from pathlib import Path
 
 from loguru import logger
 
 from .protocol import (
-    DEFAULT_API_PORT_OFFSET,
-    DEFAULT_BASE_PORT,
-    DEFAULT_CLIENT_PORT_OFFSET,
+    DEFAULT_API_PORT,
+    DEFAULT_CLIENT_PORT,
+    DEFAULT_DASHBOARD_PORT,
+    DEFAULT_SERVER_PORT,
     STRATEGY_HASH,
     STRATEGY_RANDOM,
 )
@@ -34,19 +36,37 @@ def _setup_logger(service_mode: bool = False) -> None:
                retention="7 days", format=fmt)
 
 
+def _load_config_file(path: str) -> dict:
+    """Load config from a JSON file. Returns empty dict if file doesn't exist."""
+    p = Path(path)
+    if not p.exists():
+        logger.error(f"Config file not found: {path}")
+        sys.exit(1)
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def _apply_config(args: argparse.Namespace, cfg: dict) -> None:
+    """Apply config file values to args (only if not already set by CLI)."""
+    for key in ("mode", "listen", "advertise", "strategy"):
+        if key in cfg and getattr(args, key, None) is None:
+            setattr(args, key, cfg[key])
+    for key in ("server_port", "client_port", "api_port", "weight"):
+        if key in cfg and getattr(args, key, None) is None:
+            setattr(args, key, cfg[key])
+
+
 def _run_components(
     mode: str,
-    base_port: int,
+    server_port: int,
+    client_port: int,
+    api_port: int,
     listen: str,
+    advertise: str,
     strategy: str,
     weight: int,
-    bind: str,
 ) -> None:
     from .api import MopsApi
     from .stats import ConnectionTracker, TrafficHistory, TrafficStats
-
-    client_port = base_port + DEFAULT_CLIENT_PORT_OFFSET
-    api_port = base_port + DEFAULT_API_PORT_OFFSET
 
     # Create stats objects based on mode
     server_stats = TrafficStats() if mode in ("server", "both") else None
@@ -63,8 +83,8 @@ def _run_components(
 
         if mode in ("server", "both"):
             server = MopsServer(
-                port=base_port, weight=weight, bind=bind,
-                stats=server_stats, conn_tracker=conn_tracker,
+                port=server_port, api_port=api_port, weight=weight,
+                bind=advertise, stats=server_stats, conn_tracker=conn_tracker,
             )
         if mode in ("client", "both"):
             client = MopsClient(
@@ -91,11 +111,9 @@ def _run_components(
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
-                # Unix: use add_signal_handler
                 loop = asyncio.get_running_loop()
                 loop.add_signal_handler(sig, _signal_handler)
             except (NotImplementedError, AttributeError):
-                # Windows: use signal.signal (runs in main thread)
                 signal.signal(sig, lambda s, f: _signal_handler())
 
         async def _shutdown():
@@ -114,11 +132,9 @@ def _run_components(
         if client:
             tasks.append(asyncio.create_task(client.run()))
 
-        # Wait for shutdown signal
         await shutdown_event.wait()
         await _shutdown()
 
-        # Cancel running tasks
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -127,12 +143,17 @@ def _run_components(
 
 
 def cmd_run(args: argparse.Namespace) -> None:
-    _setup_logger(args.service)
-    base_port = args.port or DEFAULT_BASE_PORT
-    mode = args.mode
-    bind = getattr(args, "bind", "") or ""
-
-    _run_components(mode, base_port, args.listen, args.strategy, args.weight, bind)
+    _setup_logger()
+    _run_components(
+        mode=args.mode,
+        server_port=args.server_port,
+        client_port=args.client_port,
+        api_port=args.api_port,
+        listen=args.listen,
+        advertise=args.advertise,
+        strategy=args.strategy,
+        weight=args.weight,
+    )
 
 
 def cmd_install(args: argparse.Namespace) -> None:
@@ -152,9 +173,13 @@ def cmd_start(args: argparse.Namespace) -> None:
     from .service import start
     start(
         mode=args.mode,
-        port=args.port or DEFAULT_BASE_PORT,
+        server_port=args.server_port,
+        client_port=args.client_port,
+        api_port=args.api_port,
+        listen=args.listen,
+        advertise=args.advertise,
         strategy=args.strategy,
-        bind=getattr(args, "bind", "") or "",
+        weight=args.weight,
     )
 
 
@@ -205,10 +230,32 @@ def cmd_proxy_status(args: argparse.Namespace) -> None:
 
 
 def cmd_dashboard(args: argparse.Namespace) -> None:
-    _setup_logger(args.service)
+    _setup_logger()
     from .dashboard import MopsDashboard
     d = MopsDashboard(port=args.port)
     asyncio.run(d.run())
+
+
+def _add_common_args(p: argparse.ArgumentParser) -> None:
+    """Add shared arguments to a subparser."""
+    p.add_argument("--mode", choices=["server", "client", "both"],
+                   default=None, help="Run mode (default: both)")
+    p.add_argument("--server-port", type=int, default=None,
+                   help=f"Server TCP port (default: {DEFAULT_SERVER_PORT})")
+    p.add_argument("--client-port", type=int, default=None,
+                   help=f"Client proxy port (default: {DEFAULT_CLIENT_PORT})")
+    p.add_argument("--api-port", type=int, default=None,
+                   help=f"REST API port (default: {DEFAULT_API_PORT})")
+    p.add_argument("--listen", default=None,
+                   help="Client listen address (default: 127.0.0.1)")
+    p.add_argument("--advertise", default=None,
+                   help="mDNS advertise address (auto-detect if omitted)")
+    p.add_argument("--strategy", choices=[STRATEGY_RANDOM, STRATEGY_HASH],
+                   default=None, help="Load balance strategy (default: random)")
+    p.add_argument("--weight", type=int, default=None,
+                   help="Server weight (default: 1)")
+    p.add_argument("-c", "--config", default=None,
+                   help="Load config from JSON file")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -220,21 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # run - direct execution (foreground)
     sp_run = subparsers.add_parser("run", help="Start MOPS directly (foreground)")
-    sp_run.add_argument("mode", nargs="?", default="both",
-                        choices=["server", "client", "both"],
-                        help="Run mode (default: both)")
-    sp_run.add_argument("--port", type=int, default=DEFAULT_BASE_PORT,
-                        help="Base port (default: 10080)")
-    sp_run.add_argument("--strategy", choices=[STRATEGY_RANDOM, STRATEGY_HASH],
-                        default=STRATEGY_RANDOM, help="Load balance strategy")
-    sp_run.add_argument("--listen", default="127.0.0.1",
-                        help="Client listen address (default: 127.0.0.1)")
-    sp_run.add_argument("--service", action="store_true",
-                        help=argparse.SUPPRESS)
-    sp_run.add_argument("--weight", type=int, default=1,
-                        help="Server weight (default: 1)")
-    sp_run.add_argument("--bind", default="",
-                        help="IP address to advertise via mDNS (auto-detect if omitted)")
+    _add_common_args(sp_run)
     sp_run.set_defaults(func=cmd_run)
 
     # service - system service management
@@ -249,16 +282,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp_svc_uninstall = service_sub.add_parser("uninstall", help="Uninstall system service")
     sp_svc_uninstall.set_defaults(func=cmd_uninstall)
 
-    # service start (runtime params)
+    # service start (same params as run)
     sp_svc_start = service_sub.add_parser("start", help="Start service")
-    sp_svc_start.add_argument("--mode", choices=["server", "client", "both"],
-                              default="both", help="Service mode (default: both)")
-    sp_svc_start.add_argument("--port", type=int, default=DEFAULT_BASE_PORT,
-                              help="Base port (default: 10080)")
-    sp_svc_start.add_argument("--strategy", choices=[STRATEGY_RANDOM, STRATEGY_HASH],
-                              default=STRATEGY_RANDOM, help="Load balance strategy")
-    sp_svc_start.add_argument("--bind", default="",
-                              help="IP address to advertise via mDNS (auto-detect if omitted)")
+    _add_common_args(sp_svc_start)
     sp_svc_start.set_defaults(func=cmd_start)
 
     # service stop
@@ -281,8 +307,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp_proxy = subparsers.add_parser("proxy", help="System proxy control")
     proxy_sub = sp_proxy.add_subparsers(dest="proxy_action", help="Proxy commands")
     sp_proxy_on = proxy_sub.add_parser("on", help="Enable system proxy")
-    sp_proxy_on.add_argument("--port", type=int, default=10081,
-                             help="Proxy port (default: 10081)")
+    sp_proxy_on.add_argument("--port", type=int, default=DEFAULT_CLIENT_PORT,
+                             help=f"Proxy port (default: {DEFAULT_CLIENT_PORT})")
     sp_proxy_on.set_defaults(func=cmd_proxy_on)
     sp_proxy_off = proxy_sub.add_parser("off", help="Disable system proxy")
     sp_proxy_off.set_defaults(func=cmd_proxy_off)
@@ -291,13 +317,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     # dashboard - standalone dashboard
     sp_dashboard = subparsers.add_parser("dashboard", help="Standalone dashboard (mDNS discovery)")
-    sp_dashboard.add_argument("--port", type=int, default=10082,
-                              help="Dashboard port (default: 10082)")
-    sp_dashboard.add_argument("--service", action="store_true",
-                              help=argparse.SUPPRESS)
+    sp_dashboard.add_argument("--port", type=int, default=DEFAULT_DASHBOARD_PORT,
+                              help=f"Dashboard port (default: {DEFAULT_DASHBOARD_PORT})")
     sp_dashboard.set_defaults(func=cmd_dashboard)
 
     return parser
+
+
+def _apply_defaults(args: argparse.Namespace) -> None:
+    """Fill in default values for any None config-overridable args."""
+    defaults = {
+        "mode": "both",
+        "server_port": DEFAULT_SERVER_PORT,
+        "client_port": DEFAULT_CLIENT_PORT,
+        "api_port": DEFAULT_API_PORT,
+        "listen": "127.0.0.1",
+        "advertise": "",
+        "strategy": STRATEGY_RANDOM,
+        "weight": 1,
+    }
+    for key, val in defaults.items():
+        if getattr(args, key, None) is None:
+            setattr(args, key, val)
 
 
 def main() -> None:
@@ -305,19 +346,20 @@ def main() -> None:
     args = parser.parse_args()
 
     if not args.command:
-        # Default to "run both"
-        args = parser.parse_args(["run", "both"])
+        # Default to "run" with defaults
+        args = parser.parse_args(["run"])
+        _apply_defaults(args)
         args.func(args)
         return
 
-    # When --service flag is set, read config from file
-    if getattr(args, "service", False):
-        from .service import _load_config
-        cfg = _load_config()
-        args.mode = cfg.get("mode", "both")
-        args.port = cfg.get("port", DEFAULT_BASE_PORT)
-        args.strategy = cfg.get("strategy", STRATEGY_RANDOM)
-        args.bind = cfg.get("bind", "")
+    # Load config file if -c/--config is specified
+    config_path = getattr(args, "config", None)
+    if config_path:
+        cfg = _load_config_file(config_path)
+        _apply_config(args, cfg)
+
+    # Fill in defaults for any remaining None values
+    _apply_defaults(args)
 
     # Handle nested subcommands validation
     if args.command == "service" and not getattr(args, "service_action", None):

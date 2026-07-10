@@ -10,7 +10,7 @@ from zeroconf import ServiceInfo, Zeroconf
 
 from .protocol import (
     BUFFER_SIZE,
-    DEFAULT_API_PORT_OFFSET,
+    DEFAULT_API_PORT,
     MOPS_SERVICE_TYPE,
     SERVICE_NAME_PREFIX,
     parse_header,
@@ -28,7 +28,7 @@ class MdnsBroadcaster:
         self._zc: Zeroconf | None = None
         self._service_info: ServiceInfo | None = None
 
-    async def register(self, port: int, weight: int = 1, ttl: int = 60, bind: str = "") -> None:
+    async def register(self, port: int, api_port: int = DEFAULT_API_PORT, weight: int = 1, ttl: int = 60, bind: str = "") -> None:
         import socket
 
         hostname = socket.gethostname()
@@ -43,7 +43,6 @@ class MdnsBroadcaster:
 
         self._zc = Zeroconf()
 
-        api_port = port + DEFAULT_API_PORT_OFFSET
         properties = {
             b"weight": str(weight).encode(),
             b"version": b"0.1.0",
@@ -105,6 +104,7 @@ class MopsServer:
     def __init__(
         self,
         port: int,
+        api_port: int = DEFAULT_API_PORT,
         weight: int = 1,
         mdns_ttl: int = 60,
         bind: str = "",
@@ -112,6 +112,7 @@ class MopsServer:
         conn_tracker: ConnectionTracker | None = None,
     ) -> None:
         self.port = port
+        self.api_port = api_port
         self.weight = weight
         self.mdns_ttl = mdns_ttl
         self.bind = bind
@@ -178,7 +179,7 @@ class MopsServer:
         )
         logger.info(f"Server listening on 0.0.0.0:{self.port}")
 
-        await self._broadcaster.register(self.port, self.weight, self.mdns_ttl, self.bind)
+        await self._broadcaster.register(self.port, self.api_port, self.weight, self.mdns_ttl, self.bind)
 
         async with self._server:
             await self._server.serve_forever()
