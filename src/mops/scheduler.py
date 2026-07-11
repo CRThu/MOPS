@@ -46,6 +46,8 @@ class Scheduler:
 
     def report_fail(self, node: NodeInfo) -> None:
         key = f"{node.ip}:{node.port}"
+        if key not in self._nodes:
+            return
         self._nodes[key].fails += 1
         self._nodes[key].last_fail = time.monotonic()
         logger.warning(

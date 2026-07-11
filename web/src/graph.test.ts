@@ -126,7 +126,7 @@ describe('updateGraph', () => {
     })
     await updateGraph(graph, data)
 
-    const edgesArg = graph.setData.mock.calls[0][0].edges
+    const edgesArg = mockGraphInstance.setData.mock.calls[0][0].edges
     const activeEdge = edgesArg.find((e: any) => e.id === 'e-active')
     expect(activeEdge.style.stroke).toBe('#2d6a4f')
     expect(activeEdge.style.lineWidth).toBe(2)
@@ -141,7 +141,7 @@ describe('updateGraph', () => {
     })
     await updateGraph(graph, data)
 
-    const edgesArg = graph.setData.mock.calls[0][0].edges
+    const edgesArg = mockGraphInstance.setData.mock.calls[0][0].edges
     const inactiveEdge = edgesArg.find((e: any) => e.id === 'e-inactive')
     expect(inactiveEdge.style.stroke).toBe('#374151')
     expect(inactiveEdge.style.lineWidth).toBe(1)
@@ -152,7 +152,7 @@ describe('updateGraph', () => {
     const data = makeTopoData()
     await updateGraph(graph, data)
 
-    const nodesArg = graph.setData.mock.calls[0][0].nodes
+    const nodesArg = mockGraphInstance.setData.mock.calls[0][0].nodes
     const appNode = nodesArg.find((n: any) => n.id === 'app')
     const clientNode = nodesArg.find((n: any) => n.id === 'cli-local')
     const serverNode = nodesArg.find((n: any) => n.id === 'srv-10.0.0.1:10080')
@@ -174,7 +174,7 @@ describe('updateGraph', () => {
     })
     await updateGraph(graph, data)
 
-    const nodesArg = graph.setData.mock.calls[0][0].nodes
+    const nodesArg = mockGraphInstance.setData.mock.calls[0][0].nodes
     const offlineNode = nodesArg.find((n: any) => n.id === 'srv-10.0.0.2:10080')
     expect(offlineNode.style.fill).toBe('#1f2937')
   })

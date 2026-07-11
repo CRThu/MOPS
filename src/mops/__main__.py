@@ -116,6 +116,25 @@ def _run_components(
             except (NotImplementedError, AttributeError):
                 signal.signal(sig, lambda s, f: _signal_handler())
 
+        async def _update_traffic_history():
+            """Periodically record aggregate traffic snapshot for speed computation."""
+            while True:
+                await asyncio.sleep(1)
+                if not traffic_history:
+                    continue
+                total_up = 0
+                total_down = 0
+                active_conns = 0
+                if server_stats:
+                    total_up += server_stats.get_total_up()
+                    total_down += server_stats.get_total_down()
+                    active_conns += server_stats.active_conns
+                if client_stats:
+                    total_up += client_stats.get_total_up()
+                    total_down += client_stats.get_total_down()
+                    active_conns += client_stats.active_conns
+                traffic_history.record(total_up, total_down, active_conns)
+
         async def _shutdown():
             logger.info("Shutting down...")
             if server:
@@ -131,6 +150,8 @@ def _run_components(
             tasks.append(asyncio.create_task(server.run()))
         if client:
             tasks.append(asyncio.create_task(client.run()))
+        if traffic_history:
+            tasks.append(asyncio.create_task(_update_traffic_history()))
 
         await shutdown_event.wait()
         await _shutdown()

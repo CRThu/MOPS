@@ -45,7 +45,6 @@ class MdnsBroadcaster:
 
         properties = {
             b"weight": str(weight).encode(),
-            b"version": b"0.1.0",
             b"api_port": str(api_port).encode(),
         }
 

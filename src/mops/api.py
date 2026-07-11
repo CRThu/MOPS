@@ -50,6 +50,14 @@ class MopsApi:
         total_up = 0
         total_down = 0
 
+        # Count active connections per server from conn_tracker
+        active_by_server: dict[str, int] = {}
+        if self._conn_tracker:
+            for conn in self._conn_tracker.get_connections():
+                if conn["status"] == "active":
+                    key = f"{conn['target_host']}:{conn['target_port']}"
+                    active_by_server[key] = active_by_server.get(key, 0) + 1
+
         # Server-side traffic (this node's own connections)
         if self._server_stats:
             for name, ns in self._server_stats.get_all_nodes().items():
@@ -62,7 +70,7 @@ class MopsApi:
                     "status": "active",
                     "total_up": ns.up,
                     "total_down": ns.down,
-                    "active_conns": 0,
+                    "active_conns": self._conn_tracker.active_count() if self._conn_tracker else (self._server_stats.active_conns if self._server_stats else 0),
                     "connections": [],
                     "speed_up": 0,
                     "speed_down": 0,
@@ -83,7 +91,7 @@ class MopsApi:
                     "status": "circuit-open" if ns.fails >= 2 else "active",
                     "total_up": ns.up,
                     "total_down": ns.down,
-                    "active_conns": 0,
+                    "active_conns": active_by_server.get(f"{ns.ip}:{ns.port}", 0),
                     "connections": [],
                     "speed_up": 0,
                     "speed_down": 0,

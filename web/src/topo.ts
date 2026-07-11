@@ -82,6 +82,7 @@ export function createGraph(el: HTMLElement): Graph {
     autoResize: true,
     background: C.bg,
     theme: 'dark',
+    padding: 100,
     layout: {
       type: 'dagre',
       rankdir: 'LR',
@@ -168,14 +169,14 @@ function zoomBy(factor: number) {
 
 function fitView() {
   if (!graph) return
-  graph.fitView({ padding: 100, duration: 300 })
+  graph.fitView(undefined, { duration: 300 })
 }
 
 function setAutoFit(on: boolean) {
   autoFit = on
   autoFitToggleEl?.classList.toggle('active', on)
   if (on && graph) {
-    graph.fitView({ padding: 100, duration: 300 })
+    graph.fitView(undefined, { duration: 300 })
   }
 }
 
@@ -270,7 +271,7 @@ export async function updateGraph(g: Graph, data: TopoData) {
   if (topologyChanged || !renderedOnce) {
     g.setData({ nodes, edges })
     await g.render()
-    g.fitView({ padding: 100 })
+    g.fitView()
     renderedOnce = true
   } else {
     g.setData({ nodes, edges })
