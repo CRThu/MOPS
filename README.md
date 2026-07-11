@@ -13,7 +13,7 @@
 - **连接追踪** — Server 端记录所有 client 连接（IP、目标、状态），最近 5 分钟滚动历史
 - **系统代理** — 一键设置/取消系统全局代理（Windows / macOS / Linux）
 - **REST API** — 实时查看节点状态、流量统计、连接信息
-- **Web Dashboard** — AntV G6 拓扑图 + 暗色科技感界面，15s 自动刷新
+- **Web Dashboard** — AntV G6 拓扑图 + 暗色科技感界面，1s 轮询自动刷新
 
 ## 安装
 
@@ -59,7 +59,7 @@ mops service stop                                  # 停止服务
 mops service status                                # 查看服务状态
 mops service uninstall                             # 卸载服务
 mops service log    [-n 50] [-s keyword]           # 查看日志
-mops dashboard     [--port 10100] [-c config.json] # 独立 Dashboard
+mops dashboard     [--port 10100]                     # 独立 Dashboard
 mops proxy on      [--port 10081]                  # 设置系统全局代理
 mops proxy off                                     # 取消系统全局代理
 mops proxy status                                  # 查看代理状态
@@ -179,7 +179,7 @@ prepend:
   - **集成模式**（`mops run both`）：显示完整的 `App → Client → Server → Internet` 链路
   - **独立模式**（`mops dashboard`）：从网络推断 Client 节点，仅显示 `Client → Server → Internet`
 - **语义缩放**：节点少时显示 hostname + IP:port 详情，节点多时自动隐藏标签避免重叠
-- **活跃连接** — 橙色流动粒子动画，15 秒自动刷新
+- **活跃连接** — 橙色流动虚线动画，1 秒自动刷新
 - **节点状态** — 绿色活跃、灰色熔断、暗色离线，实时更新
 
 ### REST API
@@ -188,6 +188,7 @@ prepend:
 |------|------|
 | `GET /` | Web Dashboard 页面 |
 | `GET /api/server` | Server 状态 + 流量 + 连接信息 JSON |
+| `GET /api/dashboard` | 同 `/api/server`（别名） |
 
 <details>
 <summary>响应示例</summary>
@@ -314,6 +315,7 @@ MOPS/
 │   ├── client.py         # SOCKS5 + HTTP CONNECT + HTTP 代理
 │   ├── discovery.py      # mDNS 服务浏览
 │   ├── scheduler.py      # 负载均衡 + 熔断
+│   ├── dashboard.py      # 独立 Dashboard 服务
 │   ├── api.py            # REST API + 统一 /api/dashboard 响应
 │   ├── web.py            # 共享静态文件服务
 │   ├── static/           # Vite 构建输出（G6 Dashboard）
@@ -325,16 +327,27 @@ MOPS/
 ├── web/                  # 前端源码（Bun + Vite + TS + G6）
 │   ├── package.json
 │   ├── vite.config.ts
-│   ├── index.html
+│   ├── vitest.config.ts
+│   ├── playwright.config.ts
+│   ├── index.html        # 双栏布局 (70/30)
 │   └── src/
-│       ├── main.ts       # 数据轮询 + 转换 + 渲染
-│       ├── graph.ts      # G6 拓扑图模块
-│       └── style.css     # 暗色主题样式
+│       ├── main.ts       # 入口：1s 轮询 /api/dashboard
+│       ├── types.ts      # TypeScript 接口
+│       ├── format.ts     # 格式化函数
+│       ├── data.ts       # API 获取 + toTopo 转换
+│       ├── topo.ts       # G6 拓扑图（语义缩放 + 流动虚线动画）
+│       ├── graph.ts      # G6 拓扑图模块（替代实现）
+│       ├── cards.ts      # 服务器状态卡片
+│       ├── style.css     # 工业暗色主题
+│       ├── format.test.ts   # 格式化测试 (11)
+│       ├── toTopo.test.ts   # 数据转换测试 (16)
+│       └── graph.test.ts    # Graph 模块测试 (10)
 │   └── e2e/              # Playwright E2E 渲染测试
-│       ├── dashboard.spec.ts    # 基础 Dashboard 测试 (6)
-│       ├── multi-node.spec.ts   # 多节点渲染测试 (13)
+│       ├── dashboard.spec.ts    # 基础 Dashboard 测试 (7)
+│       ├── multi-node.spec.ts   # 多节点渲染测试 (16)
+│       ├── multi-client-viz.spec.ts # 多客户端可视化测试 (5)
 │       └── fixtures/mock-data.ts # 测试数据
-├── tests/                # 243 个后端测试 + 37 个前端单元测试 + 28 个 E2E 渲染测试，90% 覆盖率
+├── tests/                # 243 个后端测试 + 37 个前端单元测试 + 28 个 E2E 渲染测试，≥85% 覆盖率
 ├── build.py              # Nuitka 打包脚本
 ├── pyproject.toml        # 项目配置 (hatchling)
 ├── .gitignore

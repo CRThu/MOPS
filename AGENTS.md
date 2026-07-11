@@ -58,6 +58,8 @@ Client 连接 Server TCP 端口后发送一行 JSON header，Server 解析后连
 Server 端记录每个 client 连接的生命周期：
 - `start(client_ip, target_host, target_port, client_port, client_host)` → 返回 conn_id
 - `end(conn_id)` → 标记完成，移入 completed 队列
+- `active_count()` → 返回当前活跃连接数
+- `get_connections()` → 返回所有 active + completed 连接列表
 - 滚动窗口：保留最近 5 分钟的已完成连接
 - 线程安全：`threading.Lock` 保护并发访问
 - API 返回：`/api/server` 的 `connections` 字段包含 active + completed 连接
@@ -91,10 +93,10 @@ Dashboard 使用 NodeRegistry 跟踪所有发现的节点：
 
 - **zeroconf 异步 API**: Server 运行在 asyncio event loop 中，必须使用 `async_register_service` / `async_unregister_service`
 - **src 布局**: 源码位于 `src/mops/`，通过 `pyproject.toml` 配置
-- **mDNS IP 检测**: 默认通过 UDP 连 `8.8.8.8` 获取路由表实际出口网卡 IP；`--bind` 可手动覆盖
+- **mDNS IP 检测**: 默认通过 UDP 连 `8.8.8.8` 获取路由表实际出口网卡 IP；`--advertise` 可手动覆盖
 - **mDNS 属性**: Server 广播 `api_port` 属性，Client/Dashboard 解析用于 API 查询
 - **前端构建**: Dashboard 使用 AntV G6 5.x + Vite 8 + TypeScript，构建输出到 `src/mops/static/`
-- **拓扑图**: `App → Client(本地) → Server×N → Internet`，语义缩放（远看隐藏标签），活跃边流动粒子动画
+- **拓扑图**: `App → Client(本地) → Server×N → Internet`，语义缩放（远看隐藏标签），活跃边流动虚线动画
 - **Dashboard 独立运行**: `mops dashboard` 通过 mDNS 发现 Server，主动查询各 Server API，聚合后返回前端
 
 ## CLI 结构
@@ -111,10 +113,10 @@ mops run [options]                                  # 前台运行
   --weight INT                                      # Server 权重（默认 1）
   -c, --config PATH                                 # 从配置文件加载参数
 
-mops dashboard [--port 10100] [-c config.json]      # 独立 Dashboard
+mops dashboard [--port 10100]                          # 独立 Dashboard
 mops service install                                # 注册服务
 mops service start [同 run 的参数] [-c config.json]   # 启动服务
-mops service uninstall/stop/status/log              # 其他服务管理
+mops service uninstall/stop/status/log [-n 50] [-s keyword] # 其他服务管理
 mops proxy on [--port 10081]                        # 设置系统代理
 mops proxy off/status                               # 取消/查看代理
 ```
@@ -165,6 +167,7 @@ Start-Process cmd -ArgumentList "/c","$uv run python -m mops run --mode both --s
 
 ## 开发约定
 
+- **版本管理**：必须使用 `uv run bump-my-version bump patch|minor|major` 升版本，禁止手动修改版本号
 - Python 依赖管理：`uv sync` / `uv add`
 - 前端依赖管理：`bun install`（在 web/ 目录）
 - Python 测试：`uv run pytest tests/ -v --cov=mops`
@@ -213,12 +216,13 @@ MOPS/
 │       ├── types.ts    # TypeScript 接口
 │       ├── format.ts   # 格式化函数
 │       ├── data.ts     # API 获取 + toTopo 转换
-│       ├── topo.ts     # G6 拓扑图（语义缩放 + 流动粒子）
+│       ├── topo.ts     # G6 拓扑图（语义缩放 + 流动虚线动画）
+│       ├── graph.ts    # G6 拓扑图模块（替代实现）
 │       ├── cards.ts    # 服务器状态卡片
 │       ├── style.css   # 工业暗色主题
 │       ├── format.test.ts   # 格式化测试 (11)
-│       ├── toTopo.test.ts   # 数据转换测试 (7)
-│       └── graph.test.ts    # Graph 模块测试 (7)
+│       ├── toTopo.test.ts   # 数据转换测试 (16)
+│       └── graph.test.ts    # Graph 模块测试 (10)
 ├── tests/              # 测试 (243 个)
 ├── .github/workflows/ci.yml  # CI/CD 流水线
 ├── pyproject.toml      # 项目配置 (hatchling)
@@ -249,11 +253,12 @@ python -c "from mops.dashboard import MopsDashboard"
 
 **依赖方向**：
 ```
-protocol.py  ←── 所有模块（只依赖常量+数据结构）
+protocol.py  ←── server, client, dashboard, discovery, scheduler, tunnel, service, __main__
 stats/*      ←── 各组件按需 import 需要的子模块
 tunnel.py    ←── server.py, client.py
-scheduler.py ←── client.py, dashboard.py
+scheduler.py ←── client.py, dashboard.py, discovery.py
 discovery.py ←── client.py, dashboard.py
+proxy.py     ←── __main__.py（top-level）
 server.py    ←── __main__.py（lazy）
 client.py    ←── __main__.py（lazy）
 dashboard.py ←── __main__.py（lazy）
