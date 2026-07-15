@@ -115,3 +115,11 @@ class TestNodeDiscovery:
     def test_stop_without_start(self):
         # Should not crash
         self.discovery.stop()
+
+    def test_start_error_handling(self):
+        """Zeroconf init failure should not crash, just log."""
+        with patch("mops.discovery.Zeroconf", side_effect=OSError("no network")):
+            # Should not raise
+            self.discovery.start()
+            # _zc should remain None since init failed
+            assert self.discovery._zc is None

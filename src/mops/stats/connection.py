@@ -16,9 +16,10 @@ class ConnectionRecord:
     client_host: str
     target_host: str
     target_port: int
-    status: str  # "active" | "completed"
+    status: str  # "active" | "completed" | "error"
     started_at: float  # time.monotonic()
     ended_at: float | None = None
+    error_reason: str = ""
 
 
 class ConnectionTracker:
@@ -51,12 +52,16 @@ class ConnectionTracker:
             )
             return conn_id
 
-    def end(self, conn_id: str) -> None:
+    def end(self, conn_id: str, error_reason: str = "") -> None:
         with self._lock:
             rec = self._active.pop(conn_id, None)
             if rec:
-                rec.status = "completed"
                 rec.ended_at = time.monotonic()
+                if error_reason:
+                    rec.status = "error"
+                    rec.error_reason = error_reason
+                else:
+                    rec.status = "completed"
                 self._completed.append(rec)
             self._prune()
 
@@ -83,9 +88,10 @@ class ConnectionTracker:
                     "client_host": r.client_host,
                     "target_host": r.target_host,
                     "target_port": r.target_port,
-                    "status": "completed",
+                    "status": r.status,
                     "started_at": r.started_at,
                     "ended_at": r.ended_at,
+                    "error_reason": r.error_reason,
                 })
             return result
 
@@ -95,5 +101,8 @@ class ConnectionTracker:
 
     def _prune(self) -> None:
         cutoff = time.monotonic() - self._history_minutes * 60
-        while self._completed and self._completed[0].ended_at is not None and self._completed[0].ended_at < cutoff:
+        while self._completed:
+            rec = self._completed[0]
+            if rec.ended_at is None or rec.ended_at >= cutoff:
+                break
             self._completed.popleft()

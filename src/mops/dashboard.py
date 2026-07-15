@@ -98,8 +98,14 @@ class MopsDashboard:
                     data = await resp.json()
                     async with self._lock:
                         self._cache[f"{node.ip}:{node.port}"] = data
-        except Exception:
-            pass  # Server unreachable, keep stale cache
+                else:
+                    logger.debug(f"Query {url} returned status {resp.status}")
+        except asyncio.TimeoutError:
+            logger.debug(f"Query {url} timed out")
+        except (ConnectionError, OSError) as e:
+            logger.debug(f"Query {url} connection error: {e}")
+        except Exception as e:
+            logger.warning(f"Query {url} unexpected error: {type(e).__name__}: {e}")
 
     def _build_status(self) -> dict:
         nodes = []

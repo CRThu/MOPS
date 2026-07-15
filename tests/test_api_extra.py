@@ -1,4 +1,4 @@
-"""Additional API tests for run/stop and dashboard."""
+"""Additional API tests for run/stop, dashboard, and error stats."""
 
 import pytest
 from aiohttp import web
@@ -6,7 +6,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from mops.api import MopsApi
-from mops.stats import TrafficStats
+from mops.stats import TrafficStats, ConnectionTracker
 
 
 class TestMopsApiRunStop:

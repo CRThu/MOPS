@@ -21,6 +21,7 @@ STRATEGY_RANDOM = "random"
 STRATEGY_HASH = "hash"
 
 PROTOCOL_VERSION = 1
+MAX_HEADER_SIZE = 4096  # Max bytes for tunnel header line
 
 
 @dataclass
@@ -53,6 +54,8 @@ def parse_header(raw: bytes) -> tuple[str, int, int, str]:
 
     Format: {"version":1,"host":"example.com:443","client_port":10090,"client_host":"Carrot-PC"}
     """
+    if len(raw) > MAX_HEADER_SIZE:
+        raise ValueError(f"header too large: {len(raw)} bytes (max {MAX_HEADER_SIZE})")
     line = raw.decode().strip()
     if not line:
         raise ValueError("empty header")

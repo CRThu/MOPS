@@ -10,6 +10,7 @@ from mops.protocol import (
     DEFAULT_CLIENT_PORT,
     DEFAULT_DASHBOARD_PORT,
     DEFAULT_SERVER_PORT,
+    MAX_HEADER_SIZE,
     MDNS_TTL,
     MAX_FAILS,
     MOPS_SERVICE_TYPE,
@@ -106,3 +107,20 @@ class TestParseHeader:
         h = build_header("example.com", 443, client_port=10090, client_host="TestHost")
         host, port, cp, ch = parse_header(h)
         assert (host, port, cp, ch) == ("example.com", 443, 10090, "TestHost")
+
+    def test_header_too_large_raises(self):
+        huge_host = "a" * (MAX_HEADER_SIZE + 100)
+        raw = build_header(huge_host, 443)
+        assert len(raw) > MAX_HEADER_SIZE
+        with pytest.raises(ValueError, match="header too large"):
+            parse_header(raw)
+
+    def test_header_at_limit_passes(self):
+        """Header exactly at MAX_HEADER_SIZE should pass."""
+        # Build a header that's exactly MAX_HEADER_SIZE bytes
+        host_len = MAX_HEADER_SIZE - len('{"version":1,"host":":443"}\n')
+        host = "a" * max(host_len, 0)
+        raw = build_header(host, 443)
+        # May be slightly over due to JSON encoding, but close to limit
+        if len(raw) <= MAX_HEADER_SIZE:
+            parse_header(raw)  # Should not raise

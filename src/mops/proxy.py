@@ -176,10 +176,14 @@ def _macos_proxy_status() -> dict:
 
 
 def _get_active_network_services() -> list[str]:
-    result = subprocess.run(
-        ["networksetup", "-listallnetworkservices"],
-        capture_output=True, text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["networksetup", "-listallnetworkservices"],
+            capture_output=True, text=True,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError) as e:
+        logger.warning(f"Failed to list network services: {e}")
+        return []
     services = []
     for line in result.stdout.splitlines()[1:]:
         if not line.startswith("*"):

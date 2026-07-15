@@ -426,3 +426,167 @@ class TestConnectAndTunnelOSError:
         node = client._scheduler.get_node_by_key("10.0.0.1:10080")
         assert node.fails >= 1
 
+
+class TestConnectAndTunnelTimeout:
+    """Test connection timeout handling in client."""
+
+    @pytest.mark.asyncio
+    async def test_connect_and_tunnel_timeout(self):
+        client = MopsClient(listen_port=10081)
+        client._scheduler.add_node(NodeInfo(ip="10.0.0.1", port=10080))
+
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+
+        with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()):
+            await client._connect_and_tunnel(reader, writer, "example.com", 443)
+
+        # Node should have been failed
+        node = client._scheduler.get_node_by_key("10.0.0.1:10080")
+        assert node.fails >= 1
+
+    @pytest.mark.asyncio
+    async def test_connect_and_tunnel_success(self):
+        client = MopsClient(listen_port=10081)
+        client._scheduler.add_node(NodeInfo(ip="10.0.0.1", port=10080))
+
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+
+        server_reader = AsyncMock(spec=asyncio.StreamReader)
+        server_writer = AsyncMock(spec=asyncio.StreamWriter)
+        server_writer.write = MagicMock()
+        server_writer.drain = AsyncMock()
+
+        with patch("asyncio.wait_for", new_callable=AsyncMock, return_value=(server_reader, server_writer)), \
+             patch("mops.client.tunnel", new_callable=AsyncMock, return_value="eof"):
+            await client._connect_and_tunnel(reader, writer, "example.com", 443)
+
+        # Node should NOT be failed
+        node = client._scheduler.get_node_by_key("10.0.0.1:10080")
+        assert node.fails == 0
+
+    @pytest.mark.asyncio
+    async def test_connect_and_tunnel_tunnel_error(self):
+        client = MopsClient(listen_port=10081)
+        client._scheduler.add_node(NodeInfo(ip="10.0.0.1", port=10080))
+
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+
+        server_reader = AsyncMock(spec=asyncio.StreamReader)
+        server_writer = AsyncMock(spec=asyncio.StreamWriter)
+        server_writer.write = MagicMock()
+        server_writer.drain = AsyncMock()
+
+        with patch("asyncio.wait_for", new_callable=AsyncMock, return_value=(server_reader, server_writer)), \
+             patch("mops.client.tunnel", new_callable=AsyncMock, return_value="error:timeout"):
+            await client._connect_and_tunnel(reader, writer, "example.com", 443)
+
+        # Tunnel error should be logged but not fail the node
+        node = client._scheduler.get_node_by_key("10.0.0.1:10080")
+        assert node.fails == 0  # tunnel error != connection error
+
+
+class TestHTTPConnectTimeout:
+    """Test that HTTP CONNECT header read has timeout."""
+
+    @pytest.mark.asyncio
+    async def test_http_connect_header_timeout(self):
+        """Slow header reading should trigger timeout."""
+        client = MopsClient(listen_port=10081)
+
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+
+        # Simulate slow header: readline hangs
+        async def slow_readline():
+            await asyncio.sleep(100)
+            return b""
+
+        reader.readline = slow_readline
+
+        # Should timeout and return 408
+        await client._handle_http_connect(reader, writer, "example.com:443")
+        # Should have written 408 response
+        writer.write.assert_called()
+        written_data = writer.write.call_args[0][0]
+        assert b"408" in written_data
+
+    @pytest.mark.asyncio
+    async def test_http_connect_header_normal(self):
+        """Normal header reading should work."""
+        client = MopsClient(listen_port=10081)
+        client._scheduler.add_node(NodeInfo(ip="10.0.0.1", port=10080))
+
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+
+        # Normal header: \r\n after a line
+        lines = iter([b"Host: example.com\r\n", b"\r\n"])
+        reader.readline = AsyncMock(side_effect=lambda: next(lines))
+
+        with patch.object(client, "_connect_and_tunnel", new_callable=AsyncMock):
+            await client._handle_http_connect(reader, writer, "example.com:443")
+        # Should have called _connect_and_tunnel (via 200 response)
+
+
+class TestHTTPSchemeValidation:
+    """Test that HTTP proxy rejects non-HTTP schemes."""
+
+    @pytest.mark.asyncio
+    async def test_reject_ftp_scheme(self):
+        client = MopsClient(listen_port=10081)
+
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+
+        first_line = b"GET ftp://example.com/file HTTP/1.1\r\n"
+        await client._handle_http(reader, writer, first_line)
+        written = writer.write.call_args[0][0]
+        assert b"400" in written
+
+    @pytest.mark.asyncio
+    async def test_reject_no_host(self):
+        client = MopsClient(listen_port=10081)
+
+        reader = AsyncMock(spec=asyncio.StreamReader)
+        writer = AsyncMock(spec=asyncio.StreamWriter)
+        writer.get_extra_info = MagicMock(return_value=("127.0.0.1", 12345))
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+
+        # URL without hostname
+        first_line = b"GET /path HTTP/1.1\r\n"
+        await client._handle_http(reader, writer, first_line)
+        written = writer.write.call_args[0][0]
+        assert b"400" in written
+

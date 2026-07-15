@@ -48,3 +48,5 @@ web/e2e/*.png
 *.obj
 *.pdb
 *.ilk
+
+log/

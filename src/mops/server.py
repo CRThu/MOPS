@@ -20,6 +20,8 @@ from .tunnel import tunnel
 if TYPE_CHECKING:
     from .stats import ConnectionTracker, TrafficStats
 
+CONNECT_TIMEOUT = 10
+
 
 class MdnsBroadcaster:
     """Manages mDNS service registration and unregistration."""
@@ -86,12 +88,20 @@ class MdnsBroadcaster:
         except Exception:
             pass
 
+        if not candidates:
+            logger.warning("No LAN IP detected, falling back to 127.0.0.1 (mDNS won't be reachable from other machines)")
         return candidates or [socket.inet_aton("127.0.0.1")]
 
     async def unregister(self) -> None:
         if self._zc and self._service_info:
-            await self._zc.async_unregister_service(self._service_info)
-            self._zc.close()
+            try:
+                await self._zc.async_unregister_service(self._service_info)
+            except Exception as e:
+                logger.debug(f"mDNS unregister service warning: {e}")
+            try:
+                self._zc.close()
+            except Exception as e:
+                logger.debug(f"mDNS close warning: {e}")
             self._service_info = None
             self._zc = None
             logger.info("mDNS service unregistered")
@@ -129,6 +139,7 @@ class MopsServer:
 
         conn_id: str | None = None
         target_writer: asyncio.StreamWriter | None = None
+        error_reason = ""
         try:
             header = await reader.readline()
             if not header:
@@ -137,28 +148,46 @@ class MopsServer:
             try:
                 host, port, client_port, client_host = parse_header(header)
             except (ValueError, KeyError) as e:
-                logger.warning(f"Invalid header: {e}")
+                logger.warning(f"Invalid header from {peer}: {e}")
                 return
 
             if self._conn_tracker:
                 conn_id = self._conn_tracker.start(peer_ip, host, port, client_port=client_port, client_host=client_host)
 
             logger.debug(f"Connecting to {host}:{port}")
-            target_reader, target_writer = await asyncio.open_connection(host, port)
+            try:
+                target_reader, target_writer = await asyncio.wait_for(
+                    asyncio.open_connection(host, port),
+                    timeout=CONNECT_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                error_reason = f"connect-timeout ({host}:{port})"
+                logger.warning(f"Connect timeout to {host}:{port} from {peer}")
+                return
+            except (ConnectionError, OSError) as e:
+                error_reason = f"connect-failed ({e})"
+                logger.warning(f"Connect failed to {host}:{port} from {peer}: {e}")
+                return
 
-            await tunnel(
+            tunnel_reason = await tunnel(
                 reader, writer, target_reader, target_writer,
                 stats=self._stats, node_name=f"server:{self.port}",
+                tag=f"{peer_ip}->{host}:{port}",
             )
-        except (ConnectionError, OSError) as e:
-            logger.debug(f"Connection error: {e}")
+            if tunnel_reason and tunnel_reason != "eof":
+                error_reason = tunnel_reason
+                if "timeout" in tunnel_reason:
+                    logger.warning(f"Tunnel timeout {peer_ip}->{host}:{port}: {tunnel_reason}")
+                elif "dns" in tunnel_reason:
+                    logger.warning(f"Tunnel DNS error {peer_ip}->{host}:{port}: {tunnel_reason}")
         except asyncio.IncompleteReadError:
-            pass
+            error_reason = "incomplete-read"
         except Exception as e:
-            logger.error(f"Unexpected error in handle_client: {e}")
+            error_reason = f"unexpected:{type(e).__name__}"
+            logger.error(f"Unexpected error in handle_client from {peer}: {type(e).__name__}: {e}")
         finally:
             if self._conn_tracker and conn_id:
-                self._conn_tracker.end(conn_id)
+                self._conn_tracker.end(conn_id, error_reason=error_reason)
             if target_writer:
                 target_writer.close()
                 try:
@@ -181,7 +210,10 @@ class MopsServer:
         await self._broadcaster.register(self.port, self.api_port, self.weight, self.mdns_ttl, self.bind)
 
         async with self._server:
-            await self._server.serve_forever()
+            try:
+                await self._server.serve_forever()
+            except asyncio.CancelledError:
+                pass
 
     async def stop(self) -> None:
         """Stop the server and unregister mDNS."""

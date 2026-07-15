@@ -152,7 +152,7 @@ def status() -> dict:
 def _install_windows() -> None:
     exe = _get_exe_path()
     config_path = str(_CONFIG_FILE)
-    bin_path = f"{exe} run -c {config_path}"
+    bin_path = f'{exe} run -c "{config_path}"'
     _run_cmd([
         "sc", "create", "MOPS",
         f"binPath= {bin_path}",

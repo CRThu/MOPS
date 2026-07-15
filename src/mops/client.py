@@ -54,10 +54,14 @@ class MopsClient:
                 rest = await reader.readline()
                 first_line = first_byte + rest
                 await self._handle_http(reader, writer, first_line)
+        except asyncio.IncompleteReadError:
+            pass
         except (ConnectionError, OSError) as e:
-            logger.debug(f"Connection error: {e}")
+            winerror = getattr(e, "winerror", None)
+            if winerror not in (10054,):  # 10054 = normal connection reset
+                logger.debug(f"Proxy connection error from {peer}: {e}")
         except Exception as e:
-            logger.error(f"Unexpected error in handle_proxy: {e}")
+            logger.error(f"Unexpected error in handle_proxy: {type(e).__name__}: {e}")
         finally:
             writer.close()
             try:
@@ -161,11 +165,17 @@ class MopsClient:
             host = addr
             port = 443
 
-        # Read remaining headers until \r\n\r\n
-        while True:
-            line = await reader.readline()
-            if line == b"\r\n" or not line:
-                break
+        # Read remaining headers until \r\n\r\n (with timeout to prevent slowloris)
+        try:
+            while True:
+                line = await asyncio.wait_for(reader.readline(), timeout=10)
+                if line == b"\r\n" or not line:
+                    break
+        except asyncio.TimeoutError:
+            logger.warning(f"HTTP CONNECT header read timeout from {writer.get_extra_info('peername')}")
+            writer.write(b"HTTP/1.1 408 Request Timeout\r\n\r\n")
+            await writer.drain()
+            return
 
         logger.debug(f"HTTP CONNECT: {host}:{port}")
 
@@ -186,11 +196,24 @@ class MopsClient:
         from urllib.parse import urlparse
 
         parsed = urlparse(url)
+
+        # Only support http/https URLs
+        if parsed.scheme and parsed.scheme.lower() not in ("http", "https"):
+            logger.warning(f"Unsupported URL scheme: {parsed.scheme}")
+            client_writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+            await client_writer.drain()
+            return
+
         host = parsed.hostname
         port = parsed.port or 80
         path = parsed.path or "/"
         if parsed.query:
             path += "?" + parsed.query
+
+        if not host:
+            client_writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+            await client_writer.drain()
+            return
 
         logger.debug(f"HTTP {method}: {host}:{port}{path}")
 
@@ -205,9 +228,23 @@ class MopsClient:
         node_key = f"{node.ip}:{node.port}"
 
         try:
-            server_reader, server_writer = await asyncio.open_connection(
-                node.ip, node.port
-            )
+            try:
+                server_reader, server_writer = await asyncio.wait_for(
+                    asyncio.open_connection(node.ip, node.port),
+                    timeout=10,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"Connect timeout to server {node_key}")
+                self._scheduler.report_fail(node)
+                client_writer.write(b"HTTP/1.1 504 Gateway Timeout\r\n\r\n")
+                await client_writer.drain()
+                return
+            except (ConnectionError, OSError) as e:
+                logger.warning(f"Connect failed to server {node_key}: {e}")
+                self._scheduler.report_fail(node)
+                client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+                await client_writer.drain()
+                return
 
             # Send tunnel header
             header = build_header(host, port, self.listen_port, self._hostname)
@@ -270,10 +307,21 @@ class MopsClient:
         node_key = f"{node.ip}:{node.port}"
 
         try:
-            # Connect to the selected server
-            server_reader, server_writer = await asyncio.open_connection(
-                node.ip, node.port
-            )
+            # Connect to the selected server with timeout
+            try:
+                server_reader, server_writer = await asyncio.wait_for(
+                    asyncio.open_connection(node.ip, node.port),
+                    timeout=10,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"Connect timeout to server {node_key}")
+                self._scheduler.report_fail(node)
+                if self._stats:
+                    self._stats.update_node_fails(node_key, node.fails)
+                # Send SOCKS5 error reply (host unreachable)
+                client_writer.write(b"\x05\x04\x00\x01\x00\x00\x00\x00\x00\x00")
+                await client_writer.drain()
+                return
 
             # Send tunnel header
             header = build_header(target_host, target_port, self.listen_port, self._hostname)
@@ -284,11 +332,14 @@ class MopsClient:
             if self._stats:
                 self._stats.active_conns += 1
             try:
-                await tunnel(
+                tunnel_reason = await tunnel(
                     client_reader, client_writer,
                     server_reader, server_writer,
                     stats=self._stats, node_name=node_key,
+                    tag=f"client->{node_key}",
                 )
+                if tunnel_reason and tunnel_reason != "eof":
+                    logger.debug(f"Tunnel closed {node_key}: {tunnel_reason}")
             finally:
                 if self._stats:
                     self._stats.active_conns -= 1

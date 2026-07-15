@@ -228,3 +228,31 @@ class TestPlatformDispatch:
     def test_proxy_status_darwin(self, mock_mac_status, mock_platform):
         proxy_status()
         mock_mac_status.assert_called_once()
+
+
+class TestProxyErrorHandling:
+    """Test error handling in proxy functions."""
+
+    @patch("mops.proxy.subprocess.run", side_effect=FileNotFoundError("networksetup not found"))
+    def test_get_active_network_services_file_not_found(self, mock_run):
+        from mops.proxy import _get_active_network_services
+        result = _get_active_network_services()
+        assert result == []
+
+    @patch("mops.proxy.subprocess.run", side_effect=OSError("permission denied"))
+    def test_get_active_network_services_os_error(self, mock_run):
+        from mops.proxy import _get_active_network_services
+        result = _get_active_network_services()
+        assert result == []
+
+    @patch("mops.proxy.subprocess.run")
+    def test_get_active_network_services_filters_star_lines(self, mock_run):
+        from mops.proxy import _get_active_network_services
+        mock_run.return_value = MagicMock(
+            stdout="An asterisk indicates...\n*Starred Service\nWi-Fi\nEthernet\n",
+            returncode=0,
+        )
+        result = _get_active_network_services()
+        assert "Wi-Fi" in result
+        assert "Ethernet" in result
+        assert "*Starred Service" not in result

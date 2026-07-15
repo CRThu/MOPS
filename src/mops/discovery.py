@@ -97,7 +97,12 @@ class NodeDiscovery(ServiceListener):
         return "unknown"
 
     def start(self) -> None:
-        self._zc = Zeroconf()
+        try:
+            self._zc = Zeroconf()
+        except Exception as e:
+            from loguru import logger
+            logger.error(f"Failed to initialize mDNS: {type(e).__name__}: {e}")
+            return
         self._browser = ServiceBrowser(self._zc, MOPS_SERVICE_TYPE, self)
 
     def stop(self) -> None:

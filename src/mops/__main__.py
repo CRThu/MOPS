@@ -116,6 +116,24 @@ def _run_components(
             except (NotImplementedError, AttributeError):
                 signal.signal(sig, lambda s, f: _signal_handler())
 
+        # Suppress _ProactorBasePipeTransport._call_connection_lost errors on Windows.
+        # When a connection is reset by the remote host, asyncio's ProactorEventLoop
+        # tries to call socket.shutdown(SHUT_RDWR) in a callback, which fails with
+        # ConnectionResetError. This is a known Python/Windows issue.
+        def _loop_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+            exc = context.get("exception")
+            if exc is not None:
+                # ConnectionResetError from socket.shutdown() during cleanup
+                if isinstance(exc, ConnectionResetError):
+                    return
+                # OSError with winerror=10054 (connection reset by peer)
+                if isinstance(exc, OSError) and getattr(exc, "winerror", None) == 10054:
+                    return
+            loop.default_exception_handler(context)
+
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(_loop_exception_handler)
+
         async def _update_traffic_history():
             """Periodically record aggregate traffic snapshot for speed computation."""
             while True:

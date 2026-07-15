@@ -1,5 +1,6 @@
 """Tests for system service management (service.py)."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
 import subprocess
 
@@ -220,3 +221,27 @@ class TestStatus:
              patch("subprocess.run", return_value=mock_result):
             result = status()
             assert result["running"] is False
+
+
+class TestWindowsConfigPathQuoting:
+    """Test that Windows service install quotes config paths with spaces."""
+
+    def test_config_path_is_quoted(self):
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+
+        with patch("sys.platform", "win32"), \
+             patch("subprocess.run", return_value=mock_result) as mock_run, \
+             patch("mops.service._get_exe_path", return_value="C:\\mops.exe"), \
+             patch("mops.service._CONFIG_FILE", Path("C:\\Users\\John Doe\\.config\\mops\\config.json")):
+            install()
+
+            # Find the sc create command
+            sc_calls = [c for c in mock_run.call_args_list if "sc" in str(c) and "create" in str(c)]
+            assert len(sc_calls) == 1
+            # The binPath should have the config path quoted
+            cmd_args = sc_calls[0][0][0]
+            # Check the actual command string (index 3 contains binPath=)
+            bin_path_arg = cmd_args[3]
+            # Config path should be quoted with double quotes
+            assert 'run -c "C:\\Users\\John Doe\\.config\\mops\\config.json"' in bin_path_arg
