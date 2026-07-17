@@ -13,6 +13,7 @@ from loguru import logger
 
 from .protocol import (
     DEFAULT_API_PORT,
+    DEFAULT_CLIENT_HOST,
     DEFAULT_CLIENT_PORT,
     DEFAULT_DASHBOARD_PORT,
     DEFAULT_SERVER_PORT,
@@ -116,18 +117,25 @@ def _run_components(
             except (NotImplementedError, AttributeError):
                 signal.signal(sig, lambda s, f: _signal_handler())
 
-        # Suppress _ProactorBasePipeTransport._call_connection_lost errors on Windows.
-        # When a connection is reset by the remote host, asyncio's ProactorEventLoop
-        # tries to call socket.shutdown(SHUT_RDWR) in a callback, which fails with
-        # ConnectionResetError. This is a known Python/Windows issue.
+        # Suppress noisy errors from asyncio callbacks on Windows.
+        # The ProactorEventLoop raises various WinErrors in _call_connection_lost
+        # and other callbacks when connections are reset or networks go down.
+        # These are expected during normal proxy operation and should not crash
+        # or spam the log.
+        _SUPPRESSED_WINERRORS = {64, 121, 10053, 10054, 10056, 10057, 1225, 1235}
+
         def _loop_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
             exc = context.get("exception")
             if exc is not None:
-                # ConnectionResetError from socket.shutdown() during cleanup
-                if isinstance(exc, ConnectionResetError):
+                # Suppress all Windows-specific connection/network errors
+                winerror = getattr(exc, "winerror", None)
+                if winerror is not None and winerror in _SUPPRESSED_WINERRORS:
                     return
-                # OSError with winerror=10054 (connection reset by peer)
-                if isinstance(exc, OSError) and getattr(exc, "winerror", None) == 10054:
+                # Suppress ConnectionResetError / ConnectionAbortedError on any platform
+                if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
+                    return
+                # Suppress "cannot write to closing transport" RuntimeError
+                if isinstance(exc, RuntimeError) and "closing" in str(exc).lower():
                     return
             loop.default_exception_handler(context)
 
@@ -137,21 +145,26 @@ def _run_components(
         async def _update_traffic_history():
             """Periodically record aggregate traffic snapshot for speed computation."""
             while True:
-                await asyncio.sleep(1)
-                if not traffic_history:
-                    continue
-                total_up = 0
-                total_down = 0
-                active_conns = 0
-                if server_stats:
-                    total_up += server_stats.get_total_up()
-                    total_down += server_stats.get_total_down()
-                    active_conns += server_stats.active_conns
-                if client_stats:
-                    total_up += client_stats.get_total_up()
-                    total_down += client_stats.get_total_down()
-                    active_conns += client_stats.active_conns
-                traffic_history.record(total_up, total_down, active_conns)
+                try:
+                    await asyncio.sleep(1)
+                    if not traffic_history:
+                        continue
+                    total_up = 0
+                    total_down = 0
+                    active_conns = 0
+                    if server_stats:
+                        total_up += server_stats.get_total_up()
+                        total_down += server_stats.get_total_down()
+                        active_conns += server_stats.active_conns
+                    if client_stats:
+                        total_up += client_stats.get_total_up()
+                        total_down += client_stats.get_total_down()
+                        active_conns += client_stats.active_conns
+                    traffic_history.record(total_up, total_down, active_conns)
+                except asyncio.CancelledError:
+                    return
+                except Exception as e:
+                    logger.debug(f"Traffic history error: {type(e).__name__}: {e}")
 
         async def _shutdown():
             logger.info("Shutting down...")
@@ -159,7 +172,10 @@ def _run_components(
                 await server.stop()
             if client:
                 await client.stop()
-            await api.stop()
+            try:
+                await api.stop()
+            except Exception as e:
+                logger.debug(f"API stop warning: {e}")
 
         await api.run()
 
@@ -176,7 +192,10 @@ def _run_components(
 
         for t in tasks:
             t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=5)
+        except asyncio.TimeoutError:
+            logger.debug("Task cleanup timed out, proceeding with shutdown")
 
     asyncio.run(_run())
 
@@ -255,7 +274,19 @@ def cmd_service_log(args: argparse.Namespace) -> None:
 
 def cmd_proxy_on(args: argparse.Namespace) -> None:
     _setup_logger()
-    proxy_on(args.port)
+    host = DEFAULT_CLIENT_HOST
+    port = DEFAULT_CLIENT_PORT
+    if args.target:
+        if ":" in args.target:
+            host, port_str = args.target.rsplit(":", 1)
+            port = int(port_str)
+        else:
+            host = args.target
+    if args.host:
+        host = args.host
+    if args.port:
+        port = args.port
+    proxy_on(host, port)
 
 
 def cmd_proxy_off(args: argparse.Namespace) -> None:
@@ -346,7 +377,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp_proxy = subparsers.add_parser("proxy", help="System proxy control")
     proxy_sub = sp_proxy.add_subparsers(dest="proxy_action", help="Proxy commands")
     sp_proxy_on = proxy_sub.add_parser("on", help="Enable system proxy")
-    sp_proxy_on.add_argument("--port", type=int, default=DEFAULT_CLIENT_PORT,
+    sp_proxy_on.add_argument("target", nargs="?", default=None,
+                             help="host:port (e.g. 192.168.1.100:10081)")
+    sp_proxy_on.add_argument("--host", default=None,
+                             help="Proxy host (default: 127.0.0.1)")
+    sp_proxy_on.add_argument("--port", type=int, default=None,
                              help=f"Proxy port (default: {DEFAULT_CLIENT_PORT})")
     sp_proxy_on.set_defaults(func=cmd_proxy_on)
     sp_proxy_off = proxy_sub.add_parser("off", help="Disable system proxy")

@@ -60,7 +60,7 @@ mops service status                                # 查看服务状态
 mops service uninstall                             # 卸载服务
 mops service log    [-n 50] [-s keyword]           # 查看日志
 mops dashboard     [--port 10100]                     # 独立 Dashboard
-mops proxy on      [--port 10081]                  # 设置系统全局代理
+mops proxy on      [host:port]   [--host] [--port]  # 设置系统全局代理
 mops proxy off                                     # 取消系统全局代理
 mops proxy status                                  # 查看代理状态
 ```
@@ -142,8 +142,14 @@ curl.exe ifconfig.me
 ### 设置系统代理
 
 ```bash
-# 开启系统全局代理（所有应用流量走 MOPS）
+# 开启系统全局代理（默认 127.0.0.1:10081）
 mops proxy on
+
+# 指定地址（位置参数）
+mops proxy on 192.168.1.100:20081
+
+# 分开指定 host 和 port
+mops proxy on --host 192.168.1.100 --port 20081
 
 # 关闭并恢复原设置
 mops proxy off
@@ -347,7 +353,7 @@ MOPS/
 │       ├── multi-node.spec.ts   # 多节点渲染测试 (16)
 │       ├── multi-client-viz.spec.ts # 多客户端可视化测试 (5)
 │       └── fixtures/mock-data.ts # 测试数据
-├── tests/                # 243 个后端测试 + 37 个前端单元测试 + 28 个 E2E 渲染测试，≥85% 覆盖率
+├── tests/                # 290 个后端测试 + 37 个前端单元测试 + 28 个 E2E 渲染测试，≥85% 覆盖率
 ├── build.py              # Nuitka 打包脚本
 ├── pyproject.toml        # 项目配置 (hatchling)
 ├── .gitignore

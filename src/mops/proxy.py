@@ -13,19 +13,19 @@ if platform.system() == "Windows":
 from loguru import logger
 
 
-def _get_proxy_url(port: int) -> str:
-    return f"127.0.0.1:{port}"
+def _get_proxy_url(host: str, port: int) -> str:
+    return f"{host}:{port}"
 
 
-def proxy_on(port: int) -> None:
+def proxy_on(host: str = "127.0.0.1", port: int = 10081) -> None:
     """Enable system-wide proxy."""
     if platform.system() == "Windows":
-        _windows_proxy_on(port)
+        _windows_proxy_on(host, port)
     elif platform.system() == "Darwin":
-        _macos_proxy_on(port)
+        _macos_proxy_on(host, port)
     else:
-        _linux_proxy_on(port)
-    logger.info(f"Proxy enabled: {_get_proxy_url(port)}")
+        _linux_proxy_on(host, port)
+    logger.info(f"Proxy enabled: {_get_proxy_url(host, port)}")
 
 
 def proxy_off() -> None:
@@ -52,6 +52,7 @@ def proxy_status() -> dict:
 # --- Windows ---
 
 _WINDOWS_KEY = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+_ENV_KEY = r"Environment"
 
 
 def _win_reg_set(name: str, value) -> None:
@@ -71,16 +72,18 @@ def _win_reg_get(name: str):
         return None
 
 
-def _windows_proxy_on(port: int) -> None:
-    proxy = _get_proxy_url(port)
+def _windows_proxy_on(host: str, port: int) -> None:
+    proxy = _get_proxy_url(host, port)
     _win_reg_set("ProxyEnable", 1)
     _win_reg_set("ProxyServer", proxy)
     _win_reg_set("ProxyOverride", "localhost;127.*;<local>")
+    _set_env_vars(f"http://{proxy}", f"http://{proxy}")
     _notify_windows()
 
 
 def _windows_proxy_off() -> None:
     _win_reg_set("ProxyEnable", 0)
+    _clear_env_vars()
     _notify_windows()
 
 
@@ -104,6 +107,39 @@ def _notify_windows() -> None:
         pass
 
 
+def _set_env_vars(http_proxy: str, https_proxy: str) -> None:
+    """Persist http_proxy/https_proxy env vars via registry (survives new terminals)."""
+    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _ENV_KEY, 0, winreg.KEY_SET_VALUE)
+    winreg.SetValueEx(key, "http_proxy", 0, winreg.REG_SZ, http_proxy)
+    winreg.SetValueEx(key, "https_proxy", 0, winreg.REG_SZ, https_proxy)
+    winreg.SetValueEx(key, "HTTP_PROXY", 0, winreg.REG_SZ, http_proxy)
+    winreg.SetValueEx(key, "HTTPS_PROXY", 0, winreg.REG_SZ, https_proxy)
+    winreg.SetValueEx(key, "no_proxy", 0, winreg.REG_SZ, "localhost,127.0.0.1")
+    winreg.SetValueEx(key, "NO_PROXY", 0, winreg.REG_SZ, "localhost,127.0.0.1")
+    winreg.CloseKey(key)
+    # Also set for current process
+    os.environ["http_proxy"] = http_proxy
+    os.environ["https_proxy"] = https_proxy
+    os.environ["HTTP_PROXY"] = http_proxy
+    os.environ["HTTPS_PROXY"] = https_proxy
+    os.environ["no_proxy"] = "localhost,127.0.0.1"
+    os.environ["NO_PROXY"] = "localhost,127.0.0.1"
+    logger.info("Environment variables set (restart terminal to take effect)")
+
+
+def _clear_env_vars() -> None:
+    """Remove http_proxy/https_proxy env vars from registry and current process."""
+    for var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"):
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _ENV_KEY, 0, winreg.KEY_SET_VALUE)
+            winreg.DeleteValue(key, var)
+            winreg.CloseKey(key)
+        except FileNotFoundError:
+            pass
+        os.environ.pop(var, None)
+    logger.info("Environment variables cleared (restart terminal to take effect)")
+
+
 # --- Linux ---
 
 _PROXY_ENV_FILE = os.path.expanduser("~/.mops_proxy_env")
@@ -118,8 +154,8 @@ export NO_PROXY="localhost,127.0.0.1"
 """
 
 
-def _linux_proxy_on(port: int) -> None:
-    proxy = f"http://{_get_proxy_url(port)}"
+def _linux_proxy_on(host: str, port: int) -> None:
+    proxy = f"http://{_get_proxy_url(host, port)}"
     with open(_PROXY_ENV_FILE, "w") as f:
         f.write(_ENV_BLOCK.format(proxy=proxy))
     logger.info(f"Run: source {_PROXY_ENV_FILE}")
@@ -141,12 +177,11 @@ def _linux_proxy_status() -> dict:
 
 # --- macOS ---
 
-def _macos_proxy_on(port: int) -> None:
-    proxy = _get_proxy_url(port)
+def _macos_proxy_on(host: str, port: int) -> None:
     services = _get_active_network_services()
     for svc in services:
-        subprocess.run(["networksetup", "-setwebproxy", svc, "127.0.0.1", str(port)], capture_output=True)
-        subprocess.run(["networksetup", "-setsecurewebproxy", svc, "127.0.0.1", str(port)], capture_output=True)
+        subprocess.run(["networksetup", "-setwebproxy", svc, host, str(port)], capture_output=True)
+        subprocess.run(["networksetup", "-setsecurewebproxy", svc, host, str(port)], capture_output=True)
     if services:
         logger.info(f"Proxy set on: {', '.join(services)}")
 

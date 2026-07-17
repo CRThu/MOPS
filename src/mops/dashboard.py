@@ -25,6 +25,7 @@ class MopsDashboard:
         self._registry = NodeRegistry()
         self._history = TrafficHistory()
         self._cache: dict[str, dict] = {}  # key = "ip:port"
+        self._reachable: set[str] = set()  # keys with successful last query
         self._lock = asyncio.Lock()
         self._start_time = time.monotonic()
         self._discovery: NodeDiscovery | None = None
@@ -78,9 +79,19 @@ class MopsDashboard:
 
     async def _poll_loop_iteration(self) -> None:
         nodes = self._scheduler.get_all_nodes()
+        active_keys = {f"{n.ip}:{n.port}" for n in nodes}
         tasks = [self._query(n) for n in nodes]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Clean up stale entries
+        async with self._lock:
+            for key in list(self._reachable):
+                if key not in active_keys:
+                    self._reachable.discard(key)
+            for key in list(self._cache):
+                if key not in active_keys:
+                    del self._cache[key]
 
         # Record aggregate snapshot
         total_up = sum(d.get("total_up", 0) for d in self._cache.values())
@@ -92,28 +103,38 @@ class MopsDashboard:
 
     async def _query(self, node: NodeInfo) -> None:
         url = f"http://{node.ip}:{node.api_port}/api/server"
+        key = f"{node.ip}:{node.port}"
         try:
             async with self._http_session.get(url) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     async with self._lock:
-                        self._cache[f"{node.ip}:{node.port}"] = data
+                        self._cache[key] = data
+                        self._reachable.add(key)
                 else:
                     logger.debug(f"Query {url} returned status {resp.status}")
+                    async with self._lock:
+                        self._reachable.discard(key)
         except asyncio.TimeoutError:
             logger.debug(f"Query {url} timed out")
+            async with self._lock:
+                self._reachable.discard(key)
         except (ConnectionError, OSError) as e:
             logger.debug(f"Query {url} connection error: {e}")
+            async with self._lock:
+                self._reachable.discard(key)
         except Exception as e:
             logger.warning(f"Query {url} unexpected error: {type(e).__name__}: {e}")
+            async with self._lock:
+                self._reachable.discard(key)
 
     def _build_status(self) -> dict:
         nodes = []
         # Active nodes from scheduler (mDNS discovered)
         for info in self._scheduler.get_all_nodes():
             key = f"{info.ip}:{info.port}"
-            cached = self._cache.get(key, {})
-            status = "circuit-open" if info.fails >= MAX_FAILS else "active"
+            cached = self._cache.get(key)
+            status = "active" if key in self._reachable else "offline"
             nodes.append({
                 "ip": info.ip,
                 "port": info.port,
@@ -121,12 +142,12 @@ class MopsDashboard:
                 "hostname": info.hostname,
                 "fails": info.fails,
                 "status": status,
-                "total_up": cached.get("total_up", 0),
-                "total_down": cached.get("total_down", 0),
-                "active_conns": cached.get("active_conns", 0),
-                "connections": cached.get("connections", []),
-                "speed_up": cached.get("speed_up", 0),
-                "speed_down": cached.get("speed_down", 0),
+                "total_up": cached.get("total_up", 0) if cached else 0,
+                "total_down": cached.get("total_down", 0) if cached else 0,
+                "active_conns": cached.get("active_conns", 0) if cached else 0,
+                "connections": cached.get("connections", []) if cached else [],
+                "speed_up": cached.get("speed_up", 0) if cached else 0,
+                "speed_down": cached.get("speed_down", 0) if cached else 0,
             })
 
         # Offline nodes from registry (not in current scheduler)

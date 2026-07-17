@@ -20,7 +20,7 @@ export function toTopo(status: DashboardStatus): TopoData {
   const nodes: TopoNode[] = []
   const edges: TopoEdge[] = []
 
-  const servers = status.nodes.filter(n => n.status !== 'offline')
+  const servers = status.nodes.filter(n => n.status === 'active')
   const offline = status.nodes.filter(n => n.status === 'offline')
   const hasLocalClient = status.local_client != null
 

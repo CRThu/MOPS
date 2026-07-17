@@ -117,12 +117,24 @@ class TestBuildParser:
         args = parser.parse_args(["proxy", "on"])
         assert args.command == "proxy"
         assert args.proxy_action == "on"
-        assert args.port == 10081  # default from DEFAULT_CLIENT_PORT
+        assert args.host is None  # defaults applied later
+        assert args.port is None  # defaults applied later
 
     def test_proxy_on_custom_port(self):
         parser = build_parser()
         args = parser.parse_args(["proxy", "on", "--port", "8080"])
         assert args.port == 8080
+
+    def test_proxy_on_target(self):
+        parser = build_parser()
+        args = parser.parse_args(["proxy", "on", "192.168.1.100:20081"])
+        assert args.target == "192.168.1.100:20081"
+
+    def test_proxy_on_host_and_port(self):
+        parser = build_parser()
+        args = parser.parse_args(["proxy", "on", "--host", "192.168.1.100", "--port", "20081"])
+        assert args.host == "192.168.1.100"
+        assert args.port == 20081
 
     def test_proxy_off_subcommand(self):
         parser = build_parser()
@@ -294,10 +306,26 @@ class TestCmdFunctions:
     def test_cmd_proxy_on(self):
         from mops.__main__ import cmd_proxy_on
         from argparse import Namespace
-        args = Namespace(port=9090)
+        args = Namespace(target=None, host=None, port=9090)
         with patch("mops.__main__.proxy_on") as mock_on:
             cmd_proxy_on(args)
-            mock_on.assert_called_once_with(9090)
+            mock_on.assert_called_once_with("127.0.0.1", 9090)
+
+    def test_cmd_proxy_on_target(self):
+        from mops.__main__ import cmd_proxy_on
+        from argparse import Namespace
+        args = Namespace(target="192.168.1.100:20081", host=None, port=None)
+        with patch("mops.__main__.proxy_on") as mock_on:
+            cmd_proxy_on(args)
+            mock_on.assert_called_once_with("192.168.1.100", 20081)
+
+    def test_cmd_proxy_on_host_override(self):
+        from mops.__main__ import cmd_proxy_on
+        from argparse import Namespace
+        args = Namespace(target="10.0.0.1:10081", host="192.168.1.100", port=None)
+        with patch("mops.__main__.proxy_on") as mock_on:
+            cmd_proxy_on(args)
+            mock_on.assert_called_once_with("192.168.1.100", 10081)
 
     def test_cmd_proxy_off(self):
         from mops.__main__ import cmd_proxy_off

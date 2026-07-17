@@ -41,7 +41,7 @@ export interface NodeInfo {
   /** Consecutive connection failures (circuit breaker). */
   fails: number
   /** Node health status. */
-  status: 'active' | 'circuit-open' | 'offline'
+  status: 'active' | 'offline'
   /** Total upload bytes. */
   total_up: number
   /** Total download bytes. */

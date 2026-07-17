@@ -191,13 +191,13 @@ class MopsServer:
             if target_writer:
                 target_writer.close()
                 try:
-                    await target_writer.wait_closed()
-                except (ConnectionError, OSError, RuntimeError):
+                    await asyncio.wait_for(target_writer.wait_closed(), timeout=3)
+                except (ConnectionError, OSError, RuntimeError, asyncio.TimeoutError, asyncio.CancelledError):
                     pass
             writer.close()
             try:
-                await writer.wait_closed()
-            except (ConnectionError, OSError, RuntimeError):
+                await asyncio.wait_for(writer.wait_closed(), timeout=3)
+            except (ConnectionError, OSError, RuntimeError, asyncio.TimeoutError, asyncio.CancelledError):
                 pass
 
     async def run(self) -> None:
@@ -220,5 +220,8 @@ class MopsServer:
         await self._broadcaster.unregister()
         if self._server:
             self._server.close()
-            await self._server.wait_closed()
+            try:
+                await asyncio.wait_for(self._server.wait_closed(), timeout=5)
+            except asyncio.TimeoutError:
+                logger.warning("Server wait_closed timed out, forcing stop")
             logger.info("Server stopped")

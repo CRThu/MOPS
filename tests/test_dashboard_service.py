@@ -39,6 +39,7 @@ class TestMopsDashboard:
             "active_conns": 5,
             "connections": [{"conn_id": "1", "client_ip": "10.0.0.1"}],
         }
+        self.dashboard._reachable.add("192.168.1.1:10080")
 
         status = self.dashboard._build_status()
         assert len(status["nodes"]) == 1
@@ -59,7 +60,8 @@ class TestMopsDashboard:
         )
         self.dashboard._scheduler.add_node(info)
         status = self.dashboard._build_status()
-        assert status["nodes"][0]["status"] == "circuit-open"
+        # No cache + no reachable → offline (even with high fails)
+        assert status["nodes"][0]["status"] == "offline"
 
     def test_build_status_with_offline_node(self):
         # Add to registry only (not scheduler)
@@ -81,6 +83,8 @@ class TestMopsDashboard:
         self.dashboard._scheduler.add_node(info2)
         self.dashboard._cache["10.0.0.1:10080"] = {"total_up": 100, "total_down": 200, "active_conns": 1}
         self.dashboard._cache["10.0.0.2:10080"] = {"total_up": 300, "total_down": 400, "active_conns": 2}
+        self.dashboard._reachable.add("10.0.0.1:10080")
+        self.dashboard._reachable.add("10.0.0.2:10080")
 
         status = self.dashboard._build_status()
         assert status["total_up"] == 400
@@ -155,17 +159,20 @@ class TestMopsDashboard:
 
         assert "192.168.1.1:10080" in self.dashboard._cache
         assert self.dashboard._cache["192.168.1.1:10080"]["total_up"] == 500
+        assert "192.168.1.1:10080" in self.dashboard._reachable
 
     @pytest.mark.asyncio
     async def test_query_failure_keeps_stale(self):
         node = NodeInfo(ip="192.168.1.1", port=10080, api_port=10082)
         self.dashboard._cache["192.168.1.1:10080"] = {"total_up": 100}
+        self.dashboard._reachable.add("192.168.1.1:10080")
 
         self.dashboard._http_session.get = MagicMock(side_effect=ConnectionError("refused"))
 
         await self.dashboard._query(node)
 
         assert self.dashboard._cache["192.168.1.1:10080"]["total_up"] == 100
+        assert "192.168.1.1:10080" not in self.dashboard._reachable
 
     @pytest.mark.asyncio
     async def test_poll_iteration_with_nodes(self):
@@ -175,6 +182,7 @@ class TestMopsDashboard:
         self.dashboard._cache["10.0.0.1:10080"] = {
             "total_up": 100, "total_down": 200, "active_conns": 5,
         }
+        self.dashboard._reachable.add("10.0.0.1:10080")
         with patch.object(self.dashboard, "_query", new_callable=AsyncMock):
             await self.dashboard._poll_loop_iteration()
         assert len(self.dashboard._history._samples) == 1
@@ -200,6 +208,7 @@ class TestMopsDashboard:
             "total_up": 100, "total_down": 200, "active_conns": 5,
             "connections": [{"conn_id": "1"}],
         }
+        self.dashboard._reachable.add("10.0.0.1:10080")
         with patch.object(self.dashboard, "_query", new_callable=AsyncMock):
             await self.dashboard._poll_loop_iteration()
         status = self.dashboard._build_status()

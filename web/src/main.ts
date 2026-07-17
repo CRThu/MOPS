@@ -39,7 +39,7 @@ function generateMockStatus(servers: number, clients: number): DashboardStatus {
     api_port: 10082 + i,
     hostname: `srv-${String(i + 1).padStart(2, '0')}`,
     fails: Math.random() < 0.1 ? 2 : 0,
-    status: (Math.random() < 0.1 ? 'circuit-open' : 'active') as 'active' | 'circuit-open',
+    status: 'active' as 'active',
     total_up: Math.floor(Math.random() * 1e9),
     total_down: Math.floor(Math.random() * 1e9),
     active_conns: Math.floor(Math.random() * 20),

@@ -28,28 +28,35 @@ from mops.proxy import (
 
 class TestGetProxyUrl:
     def test_format(self):
-        assert _get_proxy_url(10081) == "127.0.0.1:10081"
+        assert _get_proxy_url("127.0.0.1", 10081) == "127.0.0.1:10081"
 
     def test_custom_port(self):
-        assert _get_proxy_url(8080) == "127.0.0.1:8080"
+        assert _get_proxy_url("127.0.0.1", 8080) == "127.0.0.1:8080"
+
+    def test_custom_host(self):
+        assert _get_proxy_url("192.168.1.100", 20081) == "192.168.1.100:20081"
 
 
 class TestWindowsProxy:
+    @patch("mops.proxy._set_env_vars")
     @patch("mops.proxy._notify_windows")
     @patch("mops.proxy._win_reg_set")
-    def test_windows_proxy_on(self, mock_set, mock_notify):
-        _windows_proxy_on(10081)
+    def test_windows_proxy_on(self, mock_set, mock_notify, mock_env):
+        _windows_proxy_on("127.0.0.1", 10081)
         assert mock_set.call_count == 3
         mock_set.assert_any_call("ProxyEnable", 1)
         mock_set.assert_any_call("ProxyServer", "127.0.0.1:10081")
         mock_notify.assert_called_once()
+        mock_env.assert_called_once_with("http://127.0.0.1:10081", "http://127.0.0.1:10081")
 
+    @patch("mops.proxy._clear_env_vars")
     @patch("mops.proxy._notify_windows")
     @patch("mops.proxy._win_reg_set")
-    def test_windows_proxy_off(self, mock_set, mock_notify):
+    def test_windows_proxy_off(self, mock_set, mock_notify, mock_env):
         _windows_proxy_off()
         mock_set.assert_called_once_with("ProxyEnable", 0)
         mock_notify.assert_called_once()
+        mock_env.assert_called_once()
 
     @patch("mops.proxy._win_reg_get")
     def test_windows_proxy_status_enabled(self, mock_get):
@@ -97,10 +104,18 @@ class TestLinuxProxy:
     @patch("builtins.open", new_callable=mock_open)
     @patch("mops.proxy.logger")
     def test_linux_proxy_on(self, mock_logger, mock_file):
-        _linux_proxy_on(10081)
+        _linux_proxy_on("127.0.0.1", 10081)
         mock_file.assert_called_once()
         written = mock_file().write.call_args[0][0]
         assert "http://127.0.0.1:10081" in written
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("mops.proxy.logger")
+    def test_linux_proxy_on_custom_host(self, mock_logger, mock_file):
+        _linux_proxy_on("192.168.1.100", 20081)
+        mock_file.assert_called_once()
+        written = mock_file().write.call_args[0][0]
+        assert "http://192.168.1.100:20081" in written
 
     @patch("os.remove")
     @patch("os.path.exists", return_value=True)
@@ -131,8 +146,21 @@ class TestMacOSProxy:
     @patch("mops.proxy.subprocess.run")
     @patch("mops.proxy._get_active_network_services", return_value=["Wi-Fi", "Ethernet"])
     def test_macos_proxy_on(self, mock_services, mock_run):
-        _macos_proxy_on(10081)
+        _macos_proxy_on("127.0.0.1", 10081)
         assert mock_run.call_count == 4
+        # Verify host and port are passed correctly
+        first_call = mock_run.call_args_list[0]
+        assert first_call[0] == (["networksetup", "-setwebproxy", "Wi-Fi", "127.0.0.1", "10081"],)
+        fourth_call = mock_run.call_args_list[3]
+        assert fourth_call[0] == (["networksetup", "-setsecurewebproxy", "Ethernet", "127.0.0.1", "10081"],)
+
+    @patch("mops.proxy.subprocess.run")
+    @patch("mops.proxy._get_active_network_services", return_value=["Wi-Fi"])
+    def test_macos_proxy_on_custom_host(self, mock_services, mock_run):
+        _macos_proxy_on("192.168.1.100", 20081)
+        assert mock_run.call_count == 2
+        first_call = mock_run.call_args_list[0]
+        assert first_call[0] == (["networksetup", "-setwebproxy", "Wi-Fi", "192.168.1.100", "20081"],)
 
     @patch("mops.proxy.subprocess.run")
     @patch("mops.proxy._get_active_network_services", return_value=["Wi-Fi"])
@@ -178,20 +206,26 @@ class TestPlatformDispatch:
     @patch("mops.proxy.platform.system", return_value="Windows")
     @patch("mops.proxy._windows_proxy_on")
     def test_proxy_on_windows(self, mock_win_on, mock_platform):
-        proxy_on(10081)
-        mock_win_on.assert_called_once_with(10081)
+        proxy_on("127.0.0.1", 10081)
+        mock_win_on.assert_called_once_with("127.0.0.1", 10081)
 
     @patch("mops.proxy.platform.system", return_value="Linux")
     @patch("mops.proxy._linux_proxy_on")
     def test_proxy_on_linux(self, mock_linux_on, mock_platform):
-        proxy_on(10081)
-        mock_linux_on.assert_called_once_with(10081)
+        proxy_on("127.0.0.1", 10081)
+        mock_linux_on.assert_called_once_with("127.0.0.1", 10081)
 
     @patch("mops.proxy.platform.system", return_value="Darwin")
     @patch("mops.proxy._macos_proxy_on")
     def test_proxy_on_darwin(self, mock_mac_on, mock_platform):
-        proxy_on(10081)
-        mock_mac_on.assert_called_once_with(10081)
+        proxy_on("127.0.0.1", 10081)
+        mock_mac_on.assert_called_once_with("127.0.0.1", 10081)
+
+    @patch("mops.proxy.platform.system", return_value="Windows")
+    @patch("mops.proxy._windows_proxy_on")
+    def test_proxy_on_custom_host(self, mock_win_on, mock_platform):
+        proxy_on("192.168.1.100", 20081)
+        mock_win_on.assert_called_once_with("192.168.1.100", 20081)
 
     @patch("mops.proxy.platform.system", return_value="Windows")
     @patch("mops.proxy._windows_proxy_off")

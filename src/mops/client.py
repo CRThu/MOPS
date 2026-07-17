@@ -65,8 +65,8 @@ class MopsClient:
         finally:
             writer.close()
             try:
-                await writer.wait_closed()
-            except (ConnectionError, OSError, RuntimeError):
+                await asyncio.wait_for(writer.wait_closed(), timeout=3)
+            except (ConnectionError, OSError, RuntimeError, asyncio.TimeoutError, asyncio.CancelledError):
                 pass
 
     async def _handle_socks5(
@@ -376,12 +376,20 @@ class MopsClient:
     async def _recovery_loop(self) -> None:
         from .protocol import RECOVERY_INTERVAL
         while True:
-            await asyncio.sleep(RECOVERY_INTERVAL)
-            self._scheduler.recover_nodes()
+            try:
+                await asyncio.sleep(RECOVERY_INTERVAL)
+                self._scheduler.recover_nodes()
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.error(f"Recovery loop error: {type(e).__name__}: {e}")
 
     async def stop(self) -> None:
         self._discovery.stop()
         if self._server:
             self._server.close()
-            await self._server.wait_closed()
+            try:
+                await asyncio.wait_for(self._server.wait_closed(), timeout=5)
+            except asyncio.TimeoutError:
+                logger.warning("Client wait_closed timed out, forcing stop")
             logger.info("Client stopped")

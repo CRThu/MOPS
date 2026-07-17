@@ -26,7 +26,7 @@ export function renderCards(
 
   container.innerHTML = sorted.map(n => {
     const statusClass = n.status
-    const statusLabel = n.status === 'circuit-open' ? 'CIRCUIT OPEN' : n.status.toUpperCase()
+    const statusLabel = n.status.toUpperCase()
 
     if (n.status === 'offline') {
       return `

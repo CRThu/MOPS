@@ -49,4 +49,4 @@ web/e2e/*.png
 *.pdb
 *.ilk
 
-log/
+logs/
