@@ -50,6 +50,18 @@ class TestScheduler:
         node2 = sched.select(client_ip="192.168.1.1", target_host="example.com")
         assert node1.ip == node2.ip
 
+    def test_hash_strategy_fallback_to_random(self):
+        """Hash strategy falls back to random when client_ip or target_host missing."""
+        sched = Scheduler(strategy=STRATEGY_HASH)
+        sched.add_node(NodeInfo(ip="10.0.0.1", port=10080))
+        sched.add_node(NodeInfo(ip="10.0.0.2", port=10080))
+        # Missing target_host — should still select a node (fallback)
+        node = sched.select(client_ip="192.168.1.1")
+        assert node.ip in ("10.0.0.1", "10.0.0.2")
+        # Missing both — should still select
+        node2 = sched.select()
+        assert node2.ip in ("10.0.0.1", "10.0.0.2")
+
     def test_circuit_breaker(self):
         sched = Scheduler()
         node = NodeInfo(ip="10.0.0.1", port=10080)
@@ -59,6 +71,12 @@ class TestScheduler:
         sched.report_fail(node)
         sched.report_fail(node)
         assert len(sched.get_active_nodes()) == 0
+
+    def test_report_fail_nonexistent_node(self):
+        sched = Scheduler()
+        node = NodeInfo(ip="10.0.0.99", port=9999)
+        # Should not crash when reporting fail for a node not in the pool
+        sched.report_fail(node)
 
     def test_circuit_breaker_recovery(self):
         import time

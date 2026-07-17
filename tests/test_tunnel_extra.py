@@ -151,6 +151,24 @@ class TestPipeWinErrorClassification:
         assert result.startswith("error:")
 
 
+class TestPipeRuntimeError:
+    """Test pipe() handles RuntimeError from drain()."""
+
+    @pytest.mark.asyncio
+    async def test_pipe_runtime_error_returns_error(self):
+        reader = AsyncMockRead(b"data")
+
+        class RuntimeErrorWriter:
+            def write(self, data):
+                pass
+
+            async def drain(self):
+                raise RuntimeError("writer is closing")
+
+        result = await pipe(reader, RuntimeErrorWriter())
+        assert "error:" in result
+
+
 class TestPipeStatsRecording:
     """Test that pipe() records traffic stats correctly."""
 

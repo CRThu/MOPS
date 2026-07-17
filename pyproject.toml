@@ -36,6 +36,9 @@ packages = ["src/mops"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: real network integration tests (deselect with '-m not integration')",
+]
 
 [tool.coverage.run]
 source = ["mops"]
