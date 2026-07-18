@@ -73,11 +73,11 @@ export const mockStatusWithServers: DashboardStatus = {
   local_client: { ip: '192.168.1.5', port: 10081 },
 }
 
-// 3 servers with mixed states: active, circuit-open, offline
+// 3 servers with mixed states: active, offline
 export const mockStatusThreeServersMixed: DashboardStatus = {
   nodes: [
     { ip: '10.0.0.1', port: 10080, api_port: 10082, hostname: 'server-alpha', fails: 0, status: 'active', total_up: 5242880, total_down: 10485760, active_conns: 3, connections: [], speed_up: 4096, speed_down: 8192 },
-    { ip: '10.0.0.2', port: 10080, api_port: 10082, hostname: 'server-beta', fails: 3, status: 'circuit-open', total_up: 1048576, total_down: 2097152, active_conns: 0, connections: [], speed_up: 0, speed_down: 0 },
+    { ip: '10.0.0.2', port: 10080, api_port: 10082, hostname: 'server-beta', fails: 3, status: 'active', total_up: 1048576, total_down: 2097152, active_conns: 0, connections: [], speed_up: 0, speed_down: 0 },
     { ip: '10.0.0.3', port: 10080, api_port: 10082, hostname: 'server-gamma', fails: 0, status: 'active', total_up: 2097152, total_down: 4194304, active_conns: 2, connections: [], speed_up: 2048, speed_down: 4096 },
   ],
   connections: [
@@ -104,7 +104,7 @@ export const mockStatusFiveServers: DashboardStatus = {
   nodes: [
     { ip: '10.0.0.1', port: 10080, hostname: 'srv-1', fails: 0, status: 'active', total_up: 10485760, total_down: 20971520, active_conns: 4, connections: [], speed_up: 8192, speed_down: 16384 },
     { ip: '10.0.0.2', port: 10080, hostname: 'srv-2', fails: 0, status: 'active', total_up: 5242880, total_down: 10485760, active_conns: 2, connections: [], speed_up: 4096, speed_down: 8192 },
-    { ip: '10.0.0.3', port: 10080, hostname: 'srv-3', fails: 2, status: 'circuit-open', total_up: 1048576, total_down: 2097152, active_conns: 0, connections: [], speed_up: 0, speed_down: 0 },
+    { ip: '10.0.0.3', port: 10080, hostname: 'srv-3', fails: 2, status: 'active', total_up: 1048576, total_down: 2097152, active_conns: 0, connections: [], speed_up: 0, speed_down: 0 },
     { ip: '10.0.0.4', port: 10080, hostname: 'srv-4', fails: 0, status: 'active', total_up: 2097152, total_down: 4194304, active_conns: 1, connections: [], speed_up: 1024, speed_down: 2048 },
     { ip: '10.0.0.5', port: 10080, hostname: 'srv-5', fails: 5, status: 'offline', total_up: 524288, total_down: 1048576, active_conns: 0, connections: [], speed_up: 0, speed_down: 0 },
   ],
@@ -219,7 +219,7 @@ export const mockStatusLargeScale: DashboardStatus = {
   nodes: [
     { ip: '10.0.0.1', port: 10080, hostname: 'srv-alpha', fails: 0, status: 'active', total_up: 10485760, total_down: 20971520, active_conns: 5, connections: [], speed_up: 8192, speed_down: 16384 },
     { ip: '10.0.0.2', port: 10080, hostname: 'srv-beta', fails: 0, status: 'active', total_up: 5242880, total_down: 10485760, active_conns: 3, connections: [], speed_up: 4096, speed_down: 8192 },
-    { ip: '10.0.0.3', port: 10080, hostname: 'srv-gamma', fails: 2, status: 'circuit-open', total_up: 1048576, total_down: 2097152, active_conns: 0, connections: [], speed_up: 0, speed_down: 0 },
+    { ip: '10.0.0.3', port: 10080, hostname: 'srv-gamma', fails: 2, status: 'active', total_up: 1048576, total_down: 2097152, active_conns: 0, connections: [], speed_up: 0, speed_down: 0 },
     { ip: '10.0.0.4', port: 10080, hostname: 'srv-delta', fails: 0, status: 'active', total_up: 2097152, total_down: 4194304, active_conns: 2, connections: [], speed_up: 1024, speed_down: 2048 },
     { ip: '10.0.0.5', port: 10080, hostname: 'srv-epsilon', fails: 5, status: 'offline', total_up: 524288, total_down: 1048576, active_conns: 0, connections: [], speed_up: 0, speed_down: 0 },
   ],

@@ -48,7 +48,7 @@ test.describe('Single-Server Topology Rendering', () => {
 })
 
 test.describe('Multi-Server Topology Rendering', () => {
-  test('renders 3 servers with mixed states (active/circuit-open)', async ({ page }) => {
+  test('renders 3 servers with mixed states (active/offline)', async ({ page }) => {
     await page.route('**/api/dashboard', (route) =>
       route.fulfill({ json: mockStatusThreeServersMixed })
     )
@@ -165,7 +165,7 @@ test.describe('Multi-Client Connection Rendering', () => {
 })
 
 test.describe('Dynamic Topology Updates', () => {
-  test('updates topology when server goes from active to circuit-open', async ({ page }) => {
+  test('updates topology when server goes from active to offline', async ({ page }) => {
     // Start with all active
     await page.route('**/api/dashboard', (route) =>
       route.fulfill({ json: mockStatusThreeServersMixed })
@@ -177,13 +177,13 @@ test.describe('Dynamic Topology Updates', () => {
     const cards = page.locator('.server-card')
     await expect(cards).toHaveCount(3)
 
-    // Update route to return data with one more server going circuit-open
+    // Update route to return data with one more server going offline
     await page.unroute('**/api/dashboard')
     const updatedData = {
       ...mockStatusThreeServersMixed,
       nodes: mockStatusThreeServersMixed.nodes.map((n) =>
         n.hostname === 'server-alpha'
-          ? { ...n, fails: 5, status: 'circuit-open' as const, active_conns: 0, speed_up: 0, speed_down: 0 }
+          ? { ...n, fails: 5, status: 'offline' as const, active_conns: 0, speed_up: 0, speed_down: 0 }
           : n
       ),
       active_conns: 2,
@@ -240,18 +240,6 @@ test.describe('Server Card State Rendering', () => {
     // Find the active card (server-alpha)
     const activeCard = page.locator('.server-card', { hasText: 'server-alpha' })
     await expect(activeCard.locator('.card-status')).toHaveText('ACTIVE')
-  })
-
-  test('circuit-open servers show correct status badge', async ({ page }) => {
-    await page.route('**/api/dashboard', (route) =>
-      route.fulfill({ json: mockStatusThreeServersMixed })
-    )
-    await page.goto('/')
-    await expect(page.locator('#cards-count')).toHaveText('3', { timeout: 10000 })
-
-    // Find the circuit-open card (server-beta)
-    const circuitCard = page.locator('.server-card', { hasText: 'server-beta' })
-    await expect(circuitCard.locator('.card-status')).toHaveText('CIRCUIT OPEN')
   })
 
   test('server cards show traffic stats', async ({ page }) => {

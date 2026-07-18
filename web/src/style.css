@@ -322,10 +322,6 @@ header {
   opacity: 0.6;
 }
 
-.server-card.circuit-open {
-  border-left: 3px solid var(--red);
-}
-
 .card-header {
   display: flex;
   justify-content: space-between;
@@ -356,11 +352,6 @@ header {
 .card-status.offline {
   background: rgba(55, 65, 81, 0.3);
   color: var(--gray);
-}
-
-.card-status.circuit-open {
-  background: rgba(155, 34, 38, 0.2);
-  color: var(--red);
 }
 
 .card-ip {
