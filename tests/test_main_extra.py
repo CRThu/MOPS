@@ -10,27 +10,16 @@ import pytest
 from mops.__main__ import (
     _run_components,
     _setup_logger,
-    cmd_service_log,
     main,
 )
 
 
 class TestSetupLogger:
-    def test_service_mode(self):
+    def test_logger_sets_up(self):
         with patch("mops.__main__.logger") as mock_logger:
-            _setup_logger(service_mode=True)
+            _setup_logger()
             mock_logger.remove.assert_called_once()
             assert mock_logger.add.call_count == 2  # stderr + file
-            levels = [call[1]["level"] for call in mock_logger.add.call_args_list]
-            assert "INFO" in levels
-
-    def test_interactive_mode(self):
-        with patch("mops.__main__.logger") as mock_logger:
-            _setup_logger(service_mode=False)
-            mock_logger.remove.assert_called_once()
-            assert mock_logger.add.call_count == 2  # stderr + file
-            levels = [call[1]["level"] for call in mock_logger.add.call_args_list]
-            assert "DEBUG" in levels
 
 
 class TestRunServer:
@@ -116,36 +105,6 @@ class TestRunBoth:
                             listen="127.0.0.1", advertise="", strategy="random", weight=1)
 
 
-class TestServiceLog:
-    def test_log_no_file(self, capsys):
-        with patch("mops.service.LOG_DIR") as mock_dir:
-            mock_dir.__truediv__ = lambda self, x: Path("/nonexistent/mops.log")
-            cmd_service_log(Namespace(lines=50, search=""))
-            captured = capsys.readouterr()
-            assert "No log file" in captured.out
-
-    def test_log_with_content(self, capsys, tmp_path):
-        log_file = tmp_path / "mops.log"
-        log_file.write_text("line1\nline2\nline3\n", encoding="utf-8")
-        with patch("mops.service.LOG_DIR") as mock_dir:
-            mock_dir.__truediv__ = lambda self, x: log_file
-            cmd_service_log(Namespace(lines=2, search=""))
-            captured = capsys.readouterr()
-            assert "line2" in captured.out
-            assert "line3" in captured.out
-            assert "line1" not in captured.out
-
-    def test_log_with_search(self, capsys, tmp_path):
-        log_file = tmp_path / "mops.log"
-        log_file.write_text("info msg\nerror msg\ninfo again\n", encoding="utf-8")
-        with patch("mops.service.LOG_DIR") as mock_dir:
-            mock_dir.__truediv__ = lambda self, x: log_file
-            cmd_service_log(Namespace(lines=50, search="error"))
-            captured = capsys.readouterr()
-            assert "error msg" in captured.out
-            assert "info msg" not in captured.out
-
-
 class TestProxyIntegration:
     def test_proxy_on_dispatches(self):
         with patch("sys.argv", ["mops", "proxy", "on"]), \
@@ -192,16 +151,6 @@ class TestConfigLoading:
             assert call_kwargs["mode"] == "server"
             assert call_kwargs["server_port"] == 20080
 
-    def test_main_service_no_action_shows_help(self):
-        with patch("sys.argv", ["mops", "service"]), \
-             patch("mops.__main__.build_parser") as mock_build:
-            mock_parser = MagicMock()
-            mock_build.return_value = mock_parser
-            mock_args = Namespace(command="service", service_action=None)
-            mock_parser.parse_args.return_value = mock_args
-            with pytest.raises(SystemExit):
-                main()
-
     def test_main_proxy_no_action_shows_help(self):
         with patch("sys.argv", ["mops", "proxy"]), \
              patch("mops.__main__.build_parser") as mock_build:
@@ -226,3 +175,40 @@ class TestConfigLoading:
         # Unchanged fields remain None (will be filled by _apply_defaults later)
         assert args.client_port is None
         assert args.listen is None
+
+
+class TestDaemonize:
+    def test_daemonize_calls_popen(self):
+        from mops.__main__ import _daemonize
+        from argparse import Namespace
+        args = Namespace(mode="both", server_port=10080, client_port=10081,
+                        api_port=10082, listen="127.0.0.1", advertise="",
+                        strategy="random", weight=1, config=None)
+        with patch("sys.platform", "win32"), \
+             patch("shutil.which", return_value="/usr/bin/uv"), \
+             patch("subprocess.Popen") as mock_popen, \
+             patch("mops.__main__.LOG_DIR") as mock_dir:
+            mock_dir.__truediv__ = MagicMock(return_value=MagicMock(
+                write_text=MagicMock()))
+            mock_popen.return_value = MagicMock(pid=12345)
+            _daemonize(args)
+            cmd = mock_popen.call_args[0][0]
+            assert "uv" in cmd[0] or "python" in cmd[0]
+
+    def test_daemonize_with_config(self):
+        from mops.__main__ import _daemonize
+        from argparse import Namespace
+        args = Namespace(mode="server", server_port=20080, client_port=20090,
+                        api_port=20100, listen="0.0.0.0", advertise="10.0.0.1",
+                        strategy="hash", weight=2, config="/path/config.json")
+        with patch("sys.platform", "win32"), \
+             patch("shutil.which", return_value="/usr/bin/uv"), \
+             patch("subprocess.Popen") as mock_popen, \
+             patch("mops.__main__.LOG_DIR") as mock_dir:
+            mock_dir.__truediv__ = MagicMock(return_value=MagicMock(
+                write_text=MagicMock()))
+            mock_popen.return_value = MagicMock(pid=99)
+            _daemonize(args)
+            cmd = mock_popen.call_args[0][0]
+            assert "-c" in cmd
+            assert "/path/config.json" in cmd

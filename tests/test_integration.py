@@ -866,3 +866,138 @@ async def test_api_connections_recorded(target):
             await asyncio.wait_for(srv_task, timeout=3)
         except (asyncio.CancelledError, asyncio.TimeoutError):
             pass
+
+
+# ── Background integration tests ──
+
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+def _port_busy(port: int) -> bool:
+    """Check if a port is in use."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _process_alive(pid: int) -> bool:
+    """Check if a process is alive."""
+    try:
+        if sys.platform == "win32":
+            result = subprocess.run(
+                ["tasklist", "/fi", f"PID eq {pid}", "/fo", "csv", "/nh"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return str(pid) in result.stdout
+        else:
+            os.kill(pid, 0)
+            return True
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+class TestBackgroundIntegration:
+    """Integration tests for mops run -b (daemonize) and mops stop."""
+
+    def test_background_start_and_stop(self):
+        """Start MOPS in background, verify it's running, then kill it."""
+        sp = _alloc_port()
+        cp = _alloc_port()
+        ap = _alloc_port()
+
+        # Start in background
+        result = subprocess.run(
+            [sys.executable, "-m", "mops", "run", "-b",
+             "--mode", "both",
+             "--server-port", str(sp),
+             "--client-port", str(cp),
+             "--api-port", str(ap)],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 0
+        assert "pid=" in result.stdout
+
+        pid = int(result.stdout.split("pid=")[1].split(")")[0])
+
+        try:
+            # Wait for ports to be ready (pythonw.exe may take longer to start)
+            deadline = time.time() + 8
+            while time.time() < deadline:
+                if _port_busy(sp) and _port_busy(ap):
+                    break
+                time.sleep(0.3)
+            else:
+                pytest.fail(f"Ports not ready: server={sp} api={ap}")
+
+            # Verify process is alive
+            assert _process_alive(pid)
+
+            # Verify API responds
+            import urllib.request
+            resp = urllib.request.urlopen(f"http://127.0.0.1:{ap}/api/server", timeout=3)
+            data = json.loads(resp.read())
+            assert data["mode"] == "both"
+        finally:
+            # Kill the background process
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/f", "/t", "/pid", str(pid)],
+                               capture_output=True, timeout=5)
+            else:
+                os.kill(pid, signal.SIGTERM)
+            time.sleep(1)
+
+        # Verify process is gone and ports freed
+        assert not _process_alive(pid)
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            if not _port_busy(sp):
+                break
+            time.sleep(0.3)
+        assert not _port_busy(sp)
+        assert not _port_busy(ap)
+
+    def test_background_server_only(self):
+        """Start MOPS in background with mode=server, verify client port unused."""
+        sp = _alloc_port()
+        cp = _alloc_port()
+        ap = _alloc_port()
+
+        result = subprocess.run(
+            [sys.executable, "-m", "mops", "run", "-b",
+             "--mode", "server",
+             "--server-port", str(sp),
+             "--client-port", str(cp),
+             "--api-port", str(ap)],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 0
+        pid = int(result.stdout.split("pid=")[1].split(")")[0])
+
+        try:
+            deadline = time.time() + 8
+            while time.time() < deadline:
+                if _port_busy(sp):
+                    break
+                time.sleep(0.3)
+            else:
+                pytest.fail(f"Server port {sp} not ready")
+
+            assert _process_alive(pid)
+            # Client port should NOT be listening
+            assert not _port_busy(cp)
+
+            # Verify API reports server mode
+            import urllib.request
+            resp = urllib.request.urlopen(f"http://127.0.0.1:{ap}/api/server", timeout=3)
+            data = json.loads(resp.read())
+            assert data["mode"] == "server"
+        finally:
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/f", "/t", "/pid", str(pid)],
+                               capture_output=True, timeout=5)
+            else:
+                os.kill(pid, signal.SIGTERM)
+            time.sleep(1)

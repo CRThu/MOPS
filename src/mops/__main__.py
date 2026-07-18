@@ -5,8 +5,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
+import shutil
 import signal
 import sys
+import threading
 from pathlib import Path
 
 from loguru import logger
@@ -22,16 +25,33 @@ from .protocol import (
 )
 from .proxy import proxy_off, proxy_on, proxy_status
 
+LOG_DIR = Path.home() / ".mops" / "logs"
 
-def _setup_logger(service_mode: bool = False) -> None:
-    from .service import LOG_DIR
 
+def _is_alive(pid: int) -> bool:
+    """Check if a process is alive."""
+    try:
+        if sys.platform == "win32":
+            import subprocess
+            r = subprocess.run(
+                ["tasklist", "/fi", f"PID eq {pid}", "/fo", "csv", "/nh"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return str(pid) in r.stdout
+        else:
+            os.kill(pid, 0)
+            return True
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _setup_logger() -> None:
     logger.remove()
     log_file = LOG_DIR / "mops.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
     fmt = "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
-    logger.add(sys.stderr, level="DEBUG" if not service_mode else "INFO",
+    logger.add(sys.stderr, level="DEBUG",
                format="{time:HH:mm:ss} | {level} | {message}")
     logger.add(str(log_file), level="DEBUG", rotation="10 MB",
                retention="7 days", format=fmt)
@@ -201,75 +221,98 @@ def _run_components(
 
 
 def cmd_run(args: argparse.Namespace) -> None:
+    if args.background:
+        _daemonize(args)
+        return
     _setup_logger()
     _run_components(
-        mode=args.mode,
-        server_port=args.server_port,
-        client_port=args.client_port,
-        api_port=args.api_port,
-        listen=args.listen,
-        advertise=args.advertise,
-        strategy=args.strategy,
-        weight=args.weight,
+        mode=args.mode, server_port=args.server_port,
+        client_port=args.client_port, api_port=args.api_port,
+        listen=args.listen, advertise=args.advertise,
+        strategy=args.strategy, weight=args.weight,
     )
 
 
-def cmd_install(args: argparse.Namespace) -> None:
-    _setup_logger()
-    from .service import install
-    install()
+def _daemonize(args: argparse.Namespace) -> None:
+    """Launch self in background and exit."""
+    import subprocess
 
+    config_path = getattr(args, "config", None)
 
-def cmd_uninstall(args: argparse.Namespace) -> None:
-    _setup_logger()
-    from .service import uninstall
-    uninstall()
+    # Detect current runner: uv → use `uv run python`; otherwise use sys.executable
+    if Path(sys.prefix) / "pyvenv.cfg" != Path(sys.prefix) / "pyvenv.cfg":
+        pass  # venv
+    uv = shutil.which("uv")
+    if uv:
+        cmd = [uv, "run", "python", "-m", "mops", "run"]
+    else:
+        cmd = [sys.executable, "-m", "mops", "run"]
 
+    cmd += [
+        "--mode", args.mode,
+        "--server-port", str(args.server_port),
+        "--client-port", str(args.client_port),
+        "--api-port", str(args.api_port),
+        "--listen", args.listen,
+        "--advertise", args.advertise or "",
+        "--strategy", args.strategy,
+        "--weight", str(args.weight),
+    ]
+    if config_path:
+        cmd += ["-c", config_path]
 
-def cmd_start(args: argparse.Namespace) -> None:
-    _setup_logger()
-    from .service import start
-    start(
-        mode=args.mode,
-        server_port=args.server_port,
-        client_port=args.client_port,
-        api_port=args.api_port,
-        listen=args.listen,
-        advertise=args.advertise,
-        strategy=args.strategy,
-        weight=args.weight,
-    )
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log = LOG_DIR / "mops.log"
+    project_dir = str(Path(__file__).resolve().parent.parent.parent)
+
+    if sys.platform == "win32":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0  # SW_HIDE
+        p = subprocess.Popen(
+            cmd, cwd=project_dir, startupinfo=si,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            stdout=open(log, "a"), stderr=subprocess.STDOUT,
+        )
+    else:
+        if os.fork() > 0:
+            os._exit(0)
+        os.setsid()
+        p = subprocess.Popen(
+            cmd, cwd=project_dir,
+            stdout=open(log, "a"), stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+        )
+
+    (LOG_DIR / "mops.pid").write_text(str(p.pid))
+    print(f"MOPS started in background (pid={p.pid})")
 
 
 def cmd_stop(args: argparse.Namespace) -> None:
-    _setup_logger()
-    from .service import stop
-    stop()
-
-
-def cmd_status(args: argparse.Namespace) -> None:
-    _setup_logger()
-    from .service import status as svc_status
-    print(json.dumps(svc_status(), indent=2))
-
-
-def cmd_service_log(args: argparse.Namespace) -> None:
-    from .service import LOG_DIR
-
-    log_file = LOG_DIR / "mops.log"
-    if not log_file.exists():
-        print(f"No log file yet: {log_file}")
+    """Stop the background MOPS process."""
+    pid_file = LOG_DIR / "mops.pid"
+    if not pid_file.exists():
+        print("No PID file found. MOPS may not be running in background.")
         return
 
-    lines = log_file.read_text(encoding="utf-8").splitlines()
-    if args.lines:
-        lines = lines[-args.lines:]
-    if args.search:
-        term = args.search.lower()
-        lines = [l for l in lines if term in l.lower()]
+    pid = int(pid_file.read_text().strip())
+    if not _is_alive(pid):
+        print(f"Process {pid} not found (already stopped?)")
+        pid_file.unlink(missing_ok=True)
+        return
 
-    for line in lines:
-        print(line)
+    try:
+        if sys.platform == "win32":
+            import subprocess
+            subprocess.run(["taskkill", "/f", "/t", "/pid", str(pid)],
+                           capture_output=True, check=True)
+        else:
+            os.kill(pid, signal.SIGTERM)
+        print(f"MOPS stopped (pid={pid})")
+    except (ProcessLookupError, OSError):
+        print(f"Process {pid} not found (already stopped?)")
+    finally:
+        pid_file.unlink(missing_ok=True)
 
 
 def cmd_proxy_on(args: argparse.Namespace) -> None:
@@ -335,43 +378,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    # run - direct execution (foreground)
-    sp_run = subparsers.add_parser("run", help="Start MOPS directly (foreground)")
+    # run - direct execution (foreground) or background
+    sp_run = subparsers.add_parser("run", help="Start MOPS")
+    sp_run.add_argument("-b", "--background", action="store_true",
+                        help="Run in background and exit")
     _add_common_args(sp_run)
     sp_run.set_defaults(func=cmd_run)
 
-    # service - system service management
-    sp_service = subparsers.add_parser("service", help="System service management")
-    service_sub = sp_service.add_subparsers(dest="service_action", help="Service commands")
-
-    # service install (no runtime params)
-    sp_svc_install = service_sub.add_parser("install", help="Install system service")
-    sp_svc_install.set_defaults(func=cmd_install)
-
-    # service uninstall
-    sp_svc_uninstall = service_sub.add_parser("uninstall", help="Uninstall system service")
-    sp_svc_uninstall.set_defaults(func=cmd_uninstall)
-
-    # service start (same params as run)
-    sp_svc_start = service_sub.add_parser("start", help="Start service")
-    _add_common_args(sp_svc_start)
-    sp_svc_start.set_defaults(func=cmd_start)
-
-    # service stop
-    sp_svc_stop = service_sub.add_parser("stop", help="Stop service")
-    sp_svc_stop.set_defaults(func=cmd_stop)
-
-    # service status
-    sp_svc_status = service_sub.add_parser("status", help="Query service status")
-    sp_svc_status.set_defaults(func=cmd_status)
-
-    # service log
-    sp_svc_log = service_sub.add_parser("log", help="View service logs")
-    sp_svc_log.add_argument("-n", "--lines", type=int, default=50,
-                            help="Number of lines to show (default: 50)")
-    sp_svc_log.add_argument("-s", "--search", type=str, default="",
-                            help="Filter lines containing text")
-    sp_svc_log.set_defaults(func=cmd_service_log)
+    # stop - stop background process
+    sp_stop = subparsers.add_parser("stop", help="Stop background MOPS process")
+    sp_stop.set_defaults(func=cmd_stop)
 
     # proxy - system proxy control
     sp_proxy = subparsers.add_parser("proxy", help="System proxy control")
@@ -434,11 +450,6 @@ def main() -> None:
 
     # Fill in defaults for any remaining None values
     _apply_defaults(args)
-
-    # Handle nested subcommands validation
-    if args.command == "service" and not getattr(args, "service_action", None):
-        parser.parse_args([args.command, "--help"])
-        sys.exit(1)
 
     if args.command == "proxy" and not getattr(args, "proxy_action", None):
         parser.parse_args([args.command, "--help"])

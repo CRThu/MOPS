@@ -1,6 +1,7 @@
 """Tests for CLI entry point (__main__.py)."""
 
-from unittest.mock import patch
+import signal
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -55,70 +56,23 @@ class TestBuildParser:
         args = parser.parse_args(["run", "-c", "config.json"])
         assert args.config == "config.json"
 
-    def test_service_install_subcommand(self):
+    def test_run_background_flag(self):
         parser = build_parser()
-        args = parser.parse_args(["service", "install"])
-        assert args.command == "service"
-        assert args.service_action == "install"
+        args = parser.parse_args(["run", "-b"])
+        assert args.background is True
 
-    def test_service_uninstall_subcommand(self):
+    def test_stop_subcommand(self):
         parser = build_parser()
-        args = parser.parse_args(["service", "uninstall"])
-        assert args.command == "service"
-        assert args.service_action == "uninstall"
-
-    def test_service_start_subcommand(self):
-        parser = build_parser()
-        args = parser.parse_args(["service", "start", "--mode", "server", "--server-port", "30080", "--strategy", "hash"])
-        assert args.command == "service"
-        assert args.service_action == "start"
-        assert args.mode == "server"
-        assert args.server_port == 30080
-        assert args.strategy == "hash"
-
-    def test_service_start_subcommand_defaults(self):
-        parser = build_parser()
-        args = parser.parse_args(["service", "start"])
-        _apply_defaults(args)
-        assert args.mode == "both"
-        assert args.server_port == 10080
-        assert args.client_port == 10081
-        assert args.api_port == 10082
-        assert args.strategy == "random"
-
-    def test_service_stop_subcommand(self):
-        parser = build_parser()
-        args = parser.parse_args(["service", "stop"])
-        assert args.command == "service"
-        assert args.service_action == "stop"
-
-    def test_service_status_subcommand(self):
-        parser = build_parser()
-        args = parser.parse_args(["service", "status"])
-        assert args.command == "service"
-        assert args.service_action == "status"
-
-    def test_service_log_subcommand(self):
-        parser = build_parser()
-        args = parser.parse_args(["service", "log"])
-        assert args.command == "service"
-        assert args.service_action == "log"
-        assert args.lines == 50
-        assert args.search == ""
-
-    def test_service_log_with_options(self):
-        parser = build_parser()
-        args = parser.parse_args(["service", "log", "-n", "100", "-s", "error"])
-        assert args.lines == 100
-        assert args.search == "error"
+        args = parser.parse_args(["stop"])
+        assert args.command == "stop"
 
     def test_proxy_on_subcommand(self):
         parser = build_parser()
         args = parser.parse_args(["proxy", "on"])
         assert args.command == "proxy"
         assert args.proxy_action == "on"
-        assert args.host is None  # defaults applied later
-        assert args.port is None  # defaults applied later
+        assert args.host is None
+        assert args.port is None
 
     def test_proxy_on_custom_port(self):
         parser = build_parser()
@@ -152,7 +106,7 @@ class TestBuildParser:
         parser = build_parser()
         args = parser.parse_args(["dashboard"])
         assert args.command == "dashboard"
-        assert args.port == 10100  # default from DEFAULT_DASHBOARD_PORT
+        assert args.port == 10100
 
     def test_dashboard_custom_port(self):
         parser = build_parser()
@@ -176,42 +130,6 @@ class TestMain:
     def test_run_server_command(self):
         with patch("sys.argv", ["mops", "run", "--mode", "server"]), \
              patch("mops.__main__.cmd_run") as mock_cmd:
-            main()
-            mock_cmd.assert_called_once()
-
-    def test_service_install_command(self):
-        with patch("sys.argv", ["mops", "service", "install"]), \
-             patch("mops.__main__.cmd_install") as mock_cmd:
-            main()
-            mock_cmd.assert_called_once()
-
-    def test_service_uninstall_command(self):
-        with patch("sys.argv", ["mops", "service", "uninstall"]), \
-             patch("mops.__main__.cmd_uninstall") as mock_cmd:
-            main()
-            mock_cmd.assert_called_once()
-
-    def test_service_start_command(self):
-        with patch("sys.argv", ["mops", "service", "start"]), \
-             patch("mops.__main__.cmd_start") as mock_cmd:
-            main()
-            mock_cmd.assert_called_once()
-
-    def test_service_stop_command(self):
-        with patch("sys.argv", ["mops", "service", "stop"]), \
-             patch("mops.__main__.cmd_stop") as mock_cmd:
-            main()
-            mock_cmd.assert_called_once()
-
-    def test_service_status_command(self):
-        with patch("sys.argv", ["mops", "service", "status"]), \
-             patch("mops.__main__.cmd_status") as mock_cmd:
-            main()
-            mock_cmd.assert_called_once()
-
-    def test_service_log_command(self):
-        with patch("sys.argv", ["mops", "service", "log"]), \
-             patch("mops.__main__.cmd_service_log") as mock_cmd:
             main()
             mock_cmd.assert_called_once()
 
@@ -240,7 +158,8 @@ class TestCmdFunctions:
         from mops.__main__ import cmd_run
         from argparse import Namespace
         args = Namespace(mode="both", server_port=10080, client_port=10081, api_port=10082,
-                        strategy="random", listen="127.0.0.1", weight=1, advertise="")
+                        strategy="random", listen="127.0.0.1", weight=1, advertise="",
+                        background=False, config=None)
         cmd_run(args)
         mock_run.assert_called_once()
 
@@ -249,7 +168,8 @@ class TestCmdFunctions:
         from mops.__main__ import cmd_run
         from argparse import Namespace
         args = Namespace(mode="server", server_port=10080, client_port=10081, api_port=10082,
-                        strategy="random", listen="127.0.0.1", weight=1, advertise="")
+                        strategy="random", listen="127.0.0.1", weight=1, advertise="",
+                        background=False, config=None)
         cmd_run(args)
         mock_run.assert_called_once()
 
@@ -258,50 +178,10 @@ class TestCmdFunctions:
         from mops.__main__ import cmd_run
         from argparse import Namespace
         args = Namespace(mode="client", server_port=10080, client_port=10081, api_port=10082,
-                        strategy="random", listen="127.0.0.1", weight=1, advertise="")
+                        strategy="random", listen="127.0.0.1", weight=1, advertise="",
+                        background=False, config=None)
         cmd_run(args)
         mock_run.assert_called_once()
-
-    def test_cmd_install(self):
-        from mops.__main__ import cmd_install
-        from argparse import Namespace
-        args = Namespace()
-        with patch("mops.service.install") as mock_install:
-            cmd_install(args)
-            mock_install.assert_called_once()
-
-    def test_cmd_uninstall(self):
-        from mops.__main__ import cmd_uninstall
-        from argparse import Namespace
-        args = Namespace()
-        with patch("mops.service.uninstall"):
-            cmd_uninstall(args)
-
-    def test_cmd_start(self):
-        from mops.__main__ import cmd_start
-        from argparse import Namespace
-        args = Namespace(mode="both", server_port=10080, client_port=10081, api_port=10082,
-                        strategy="random", listen="127.0.0.1", weight=1, advertise="")
-        with patch("mops.service.start") as mock_start:
-            cmd_start(args)
-            mock_start.assert_called_once_with(
-                mode="both", server_port=10080, client_port=10081, api_port=10082,
-                strategy="random", listen="127.0.0.1", weight=1, advertise="",
-            )
-
-    def test_cmd_stop(self):
-        from mops.__main__ import cmd_stop
-        from argparse import Namespace
-        args = Namespace()
-        with patch("mops.service.stop"):
-            cmd_stop(args)
-
-    def test_cmd_status(self):
-        from mops.__main__ import cmd_status
-        from argparse import Namespace
-        args = Namespace()
-        with patch("mops.service.status", return_value={"running": True}):
-            cmd_status(args)
 
     def test_cmd_proxy_on(self):
         from mops.__main__ import cmd_proxy_on
@@ -343,3 +223,41 @@ class TestCmdFunctions:
             cmd_proxy_status(args)
             captured = capsys.readouterr()
             assert '"enabled": true' in captured.out
+
+
+class TestCmdStop:
+    def test_stop_no_pid_file(self, capsys):
+        from mops.__main__ import cmd_stop
+        from argparse import Namespace
+        with patch("mops.__main__.LOG_DIR") as mock_dir:
+            mock_pid_file = mock_dir.__truediv__ = MagicMock(return_value=MagicMock(exists=MagicMock(return_value=False)))
+            cmd_stop(Namespace())
+            captured = capsys.readouterr()
+            assert "No PID file" in captured.out
+
+    def test_stop_with_pid(self, capsys, tmp_path):
+        from mops.__main__ import cmd_stop
+        from argparse import Namespace
+        pid_file = tmp_path / "mops.pid"
+        pid_file.write_text("12345")
+        with patch("mops.__main__.LOG_DIR", tmp_path), \
+             patch("mops.__main__._is_alive", return_value=True), \
+             patch("sys.platform", "linux"), \
+             patch("os.kill") as mock_kill:
+            cmd_stop(Namespace())
+            mock_kill.assert_called_once_with(12345, signal.SIGTERM)
+            captured = capsys.readouterr()
+            assert "stopped" in captured.out
+            assert not pid_file.exists()
+
+    def test_stop_already_dead(self, capsys, tmp_path):
+        from mops.__main__ import cmd_stop
+        from argparse import Namespace
+        pid_file = tmp_path / "mops.pid"
+        pid_file.write_text("99999")
+        with patch("mops.__main__.LOG_DIR", tmp_path), \
+             patch("mops.__main__._is_alive", return_value=False):
+            cmd_stop(Namespace())
+            captured = capsys.readouterr()
+            assert "not found" in captured.out
+            assert not pid_file.exists()
