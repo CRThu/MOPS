@@ -129,10 +129,15 @@ class MopsServer:
         self._server: asyncio.Server | None = None
         self._stats = stats
         self._conn_tracker = conn_tracker
+        self._active_tasks: set[asyncio.Task] = set()
 
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        task = asyncio.current_task()
+        if task:
+            self._active_tasks.add(task)
+
         peer = writer.get_extra_info("peername")
         peer_ip = peer[0] if peer else "unknown"
         logger.debug(f"New connection from {peer}")
@@ -186,6 +191,8 @@ class MopsServer:
             error_reason = f"unexpected:{type(e).__name__}"
             logger.error(f"Unexpected error in handle_client from {peer}: {type(e).__name__}: {e}")
         finally:
+            if task:
+                self._active_tasks.discard(task)
             if self._conn_tracker and conn_id:
                 self._conn_tracker.end(conn_id, error_reason=error_reason)
             if target_writer:
@@ -220,8 +227,12 @@ class MopsServer:
         await self._broadcaster.unregister()
         if self._server:
             self._server.close()
+            for t in list(self._active_tasks):
+                t.cancel()
+            if self._active_tasks:
+                await asyncio.gather(*self._active_tasks, return_exceptions=True)
             try:
-                await asyncio.wait_for(self._server.wait_closed(), timeout=5)
+                await asyncio.wait_for(self._server.wait_closed(), timeout=2)
             except asyncio.TimeoutError:
                 logger.warning("Server wait_closed timed out, forcing stop")
             logger.info("Server stopped")

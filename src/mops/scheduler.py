@@ -21,6 +21,7 @@ class Scheduler:
         self.strategy = strategy
         self._nodes: dict[str, NodeInfo] = {}
         self._recovery_time: dict[str, float] = {}
+        self._rr_idx: int = 0
 
     def add_node(self, node: NodeInfo) -> None:
         key = f"{node.ip}:{node.port}"
@@ -70,13 +71,16 @@ class Scheduler:
 
         if self.strategy == STRATEGY_HASH:
             if not client_ip or not target_host:
-                # Fallback to random if hash params missing
-                return random.choice(active)
+                node = active[self._rr_idx % len(active)]
+                self._rr_idx += 1
+                return node
             idx = hash(f"{client_ip}:{target_host}") % len(active)
             return active[idx]
         else:
-            # random strategy (default)
-            return random.choice(active)
+            # Round-robin selection for random strategy (ensures balanced multi-connection distribution)
+            node = active[self._rr_idx % len(active)]
+            self._rr_idx += 1
+            return node
 
     def get_active_nodes(self) -> list[NodeInfo]:
         return [n for n in self._nodes.values() if n.fails < MAX_FAILS]

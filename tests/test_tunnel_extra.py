@@ -251,3 +251,30 @@ class TestTunnelReturnValues:
         assert result == "eof"
         assert stats.get_total_up() == 5
         assert stats.get_total_down() == 5
+
+    @pytest.mark.asyncio
+    async def test_pipe_winerror_64_connection_reset(self):
+        """WinError 64 = network name no longer available."""
+        exc = OSError("specified network name no longer available")
+        exc.winerror = 64
+        reader = AsyncMockRead(raise_on_read=exc)
+        writer = AsyncMockWrite()
+        result = await pipe(reader, writer)
+        assert "connection-reset" in result
+
+    @pytest.mark.asyncio
+    async def test_tunnel_cancels_pending_on_first_completed(self):
+        """When one side finishes (r1 EOF), tunnel() should cancel the stuck r2 read side immediately."""
+        class InfiniteHangingReader:
+            async def read(self, n: int = -1) -> bytes:
+                await asyncio.sleep(100) # hangs indefinitely
+                return b""
+
+        r1 = AsyncMockRead(b"hello") # finishes immediately
+        w1 = AsyncMockWrite()
+        r2 = InfiniteHangingReader() # hangs
+        w2 = AsyncMockWrite()
+
+        # Should finish fast (in <0.5s) without waiting for 100s sleep because r2 is cancelled
+        result = await asyncio.wait_for(tunnel(r1, w1, r2, w2), timeout=1.0)
+        assert result == "eof"

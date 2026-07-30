@@ -81,7 +81,7 @@ Dashboard 使用 NodeRegistry 跟踪所有发现的节点：
 
 ### 负载均衡
 
-- `random`（默认）：随机选择，流量均匀
+- `random`（默认）：加权轮询选择 (Round-Robin)，确保多连接并发时流量均匀平摊
 - `hash`：`hash(client_ip:target_host)` 会话保持
 
 ### 健康检查
@@ -185,7 +185,7 @@ Start-Process cmd -ArgumentList "/c","$uv run python -m mops run --mode both --s
 - 前端构建：`cd web && bun run build`（输出到 src/mops/static/）
 - 打包：`uv run python build.py` (Nuitka)
 - Python 3.12+, asyncio 原生协程，禁止多线程/多进程（ConnectionTracker/NodeRegistry 保留 threading.Lock 因为 zeroconf 回调在后台线程）
-- Python 测试覆盖率：290 个测试，目标 ≥85%
+- Python 测试覆盖率：304 个测试，目标 ≥85%
 - CI/CD：`.github/workflows/ci.yml`（Python 测试 + Vitest + Playwright + 构建验证）
 - 服务模式：通过 `-c/--config` 传入配置文件，OS 服务启动时自动加载
 
@@ -232,7 +232,7 @@ MOPS/
 │       ├── format.test.ts   # 格式化测试 (11)
 │       ├── toTopo.test.ts   # 数据转换测试 (16)
 │       └── graph.test.ts    # Graph 模块测试 (10)
-├── tests/              # 测试 (243 个)
+├── tests/              # 测试 (304 个)
 ├── .github/workflows/ci.yml  # CI/CD 流水线
 ├── pyproject.toml      # 项目配置 (hatchling)
 ├── build.py            # Nuitka 打包脚本

@@ -32,10 +32,15 @@ class MopsClient:
         self._server: asyncio.Server | None = None
         self._stats = stats
         self._strategy = strategy
+        self._active_tasks: set[asyncio.Task] = set()
 
     async def handle_proxy(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        task = asyncio.current_task()
+        if task:
+            self._active_tasks.add(task)
+
         peer = writer.get_extra_info("peername")
         logger.debug(f"New proxy connection from {peer}")
 
@@ -63,6 +68,8 @@ class MopsClient:
         except Exception as e:
             logger.error(f"Unexpected error in handle_proxy: {type(e).__name__}: {e}")
         finally:
+            if task:
+                self._active_tasks.discard(task)
             writer.close()
             try:
                 await asyncio.wait_for(writer.wait_closed(), timeout=3)
