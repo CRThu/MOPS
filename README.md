@@ -49,16 +49,11 @@ Client 启动后，默认监听 `127.0.0.1:10081`，自动发现局域网内的 
 ## CLI 参考
 
 ```bash
-mops                                              # 默认 both 模式启动
+mops                                              # 默认 both 模式前台启动
 mops run        [--mode both] [--server-port 10080] [--client-port 10081] [--api-port 10082]
                  [--strategy random|hash] [--listen 127.0.0.1] [--weight 1] [--advertise <ip>]
-                 [-c config.json]
-mops service install                              # 注册服务
-mops service start   [同 run 的参数] [-c config.json]
-mops service stop                                  # 停止服务
-mops service status                                # 查看服务状态
-mops service uninstall                             # 卸载服务
-mops service log    [-n 50] [-s keyword]           # 查看日志
+                 [-c config.json] [-b]
+mops stop                                            # 停止后台进程
 mops dashboard     [--port 10100]                     # 独立 Dashboard
 mops proxy on      [host:port]   [--host] [--port]  # 设置系统全局代理
 mops proxy off                                     # 取消系统全局代理
@@ -77,6 +72,7 @@ mops proxy status                                  # 查看代理状态
 | `--advertise` | mDNS 广播地址（通过路由表自动检测） | `auto` |
 | `--strategy` | 负载均衡策略: `random` 或 `hash` | `random` |
 | `--weight` | Server 权重 (仅 server 模式) | `1` |
+| `-b, --background` | 后台运行并退出 | 前台 |
 | `-c, --config` | 从 JSON 配置文件加载参数 | — |
 
 ### 端口分配
@@ -255,37 +251,20 @@ prepend:
 - **mDNS 广播** — Server 每 60 秒刷新 TTL，Client 自动感知节点加入/离开
 - **被动熔断** — 连续 2 次连接失败 → 节点移入观察池，30 秒后自动恢复
 
-## 系统服务
-
-### Linux (systemd)
+## 后台运行
 
 ```bash
-uv run python -m mops service install
-uv run python -m mops service start --mode both --server-port 10080 --client-port 10090 --api-port 10100 --advertise 192.168.1.100
-uv run python -m mops service status
-uv run python -m mops service stop
-uv run python -m mops service uninstall
+# 后台启动
+mops run -b
+
+# 停止后台进程
+mops stop
+
+# 查看日志
+tail -f ~/.mops/logs/mops.log
 ```
 
-### Windows (sc)
-
-```powershell
-uv run python -m mops service install
-uv run python -m mops service start --mode both --server-port 10080 --client-port 10090 --api-port 10100 --advertise 192.168.1.100
-uv run python -m mops service status
-uv run python -m mops service stop
-uv run python -m mops service uninstall
-```
-
-## 日志
-
-日志自动保存到 `~/.mops/logs/mops.log`（10MB 轮转，保留 7 天）：
-
-```bash
-mops service log                # 最近 50 行
-mops service log -n 100         # 最近 100 行
-mops service log -s "error"     # 搜索关键词
-```
+日志自动保存到 `~/.mops/logs/mops.log`（10MB 轮转，保留 7 天），PID 记录到 `~/.mops/logs/mops.pid`。
 
 ## 开发
 
@@ -328,7 +307,6 @@ MOPS/
 │   │   ├── index.html
 │   │   ├── dashboard.js
 │   │   └── dashboard.css
-│   ├── service.py        # 系统服务管理
 │   └── proxy.py          # 系统代理配置
 ├── web/                  # 前端源码（Bun + Vite + TS + G6）
 │   ├── package.json
@@ -353,7 +331,7 @@ MOPS/
 │       ├── multi-node.spec.ts   # 多节点渲染测试 (16)
 │       ├── multi-client-viz.spec.ts # 多客户端可视化测试 (5)
 │       └── fixtures/mock-data.ts # 测试数据
-├── tests/                # 290 个后端测试 + 37 个前端单元测试 + 28 个 E2E 渲染测试，≥85% 覆盖率
+├── tests/                # 268 个后端测试 + 37 个前端单元测试 + 28 个 E2E 渲染测试，≥85% 覆盖率
 ├── build.py              # Nuitka 打包脚本
 ├── pyproject.toml        # 项目配置 (hatchling)
 ├── .gitignore

@@ -101,15 +101,20 @@ async def tunnel(
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
 
+        res_list = []
         for d in done:
             try:
                 res = d.result()
                 if res:
-                    return res
+                    res_list.append(res)
             except Exception as e:
-                return f"error:{e}"
+                res_list.append(f"error:{e}")
 
-        return "eof"
+        for r in res_list:
+            if r != "eof":
+                return r
+
+        return res_list[0] if res_list else "eof"
     except asyncio.CancelledError:
         t1.cancel()
         t2.cancel()

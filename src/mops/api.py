@@ -88,7 +88,7 @@ class MopsApi:
                     "api_port": 0,
                     "hostname": ns.ip,
                     "fails": ns.fails,
-                    "status": "circuit-open" if ns.fails >= 2 else "active",
+                    "status": "active",
                     "total_up": ns.up,
                     "total_down": ns.down,
                     "active_conns": active_by_server.get(f"{ns.ip}:{ns.port}", 0),

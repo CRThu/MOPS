@@ -29,7 +29,6 @@ mops dashboard → mDNS发现 → 查询各 Server /api/server → 聚合 → �
 | `dashboard.py` | 独立 Dashboard 服务：mDNS 发现 → 查询各 Server API → 聚合 → Web 服务 |
 | `api.py` | aiohttp REST API + 统一 /api/dashboard 响应 |
 | `web.py` | 共享静态文件服务（api.py + dashboard.py 共用） |
-| `service.py` | 系统服务管理 (systemd/sc) |
 | `proxy.py` | 系统代理配置：Windows 注册表 + 环境变量，Linux/macOS 原生支持 |
 | `__main__.py` | CLI 入口 (argparse)，含 `dashboard` 子命令 |
 
@@ -114,9 +113,7 @@ mops run [options]                                  # 前台运行
   -c, --config PATH                                 # 从配置文件加载参数
 
 mops dashboard [--port 10100]                          # 独立 Dashboard
-mops service install                                # 注册服务
-mops service start [同 run 的参数] [-c config.json]   # 启动服务
-mops service uninstall/stop/status/log [-n 50] [-s keyword] # 其他服务管理
+mops stop                                             # 停止后台进程
 mops proxy on [host:port] [--host] [--port]          # 设置系统代理（默认 127.0.0.1:10081）
 mops proxy off/status                               # 取消/查看代理
 ```
@@ -135,16 +132,23 @@ mops proxy off/status                               # 取消/查看代理
 | `GET /api/dashboard` | Dashboard 聚合状态（/api/server 别名） |
 | `GET /static/*` | 前端构建产物 |
 
-## 后台启动方式（Windows）
+## 后台运行
+
+```bash
+mops run -b                    # 后台启动（自动检测 uv/python）
+mops stop                      # 停止后台进程
+tail -f ~/.mops/logs/mops.log  # 查看日志
+```
+
+- 后台进程通过 `shutil.which("uv")` 自动检测运行环境：有 uv 用 `uv run python`，否则直接用 `sys.executable`
+- PID 记录到 `~/.mops/logs/mops.pid`
+- 日志写入 `~/.mops/logs/mops.log`（10MB 轮转，保留 7 天）
+
+## 后台启动方式（Windows，Agent 调试用）
 
 ```powershell
-# uv 路径（按需替换）
 $uv = "C:\Users\$env:USERNAME\.local\bin\uv.exe"
 $logDir = $env:TEMP
-
-# 推荐: cmd /c + WindowStyle Hidden（管道重定向在 cmd 内部完成，不阻塞）
-# ⚠️ 禁止用 Start-Process -NoNewWindow + -RedirectStandardOutput/Err
-#    PowerShell 的 Redirect 参数创建管道，子进程写满缓冲区后会阻塞
 
 # Dashboard
 Start-Process cmd -ArgumentList "/c","$uv run python -m mops dashboard --port 10100 >`"$logDir\mops-dash.log`" 2>&1" -WindowStyle Hidden
@@ -158,12 +162,9 @@ Start-Process cmd -ArgumentList "/c","$uv run python -m mops run --mode both --s
 
 - `cmd /c "... >file 2>&1" -WindowStyle Hidden`：重定向在 cmd 内部完成，PowerShell 不持有管道，子进程不会阻塞
 - `-WindowStyle Hidden` 隐藏窗口，不弹出 cmd 黑框
-- 不要在进程运行时用 `Get-Content` 读日志文件（会阻塞），等进程退出后再读
 - 每个实例需独立指定 server-port / client-port / api-port，避免端口冲突
 - 验证启动：`netstat -aon | Select-String "1008"` 检查端口监听
-- 查看日志：`Get-Content $env:TEMP\mops-*.log`
 - 停止所有：`Get-Process python, uv | Stop-Process -Force`
-- 不要用 `Start-Job` 运行长期外部进程——其 PowerShell 子进程退出时会杀子进程树
 
 ## 开发约定
 
@@ -211,7 +212,6 @@ MOPS/
 │   ├── api.py          # REST API + 统一 /api/dashboard 响应
 │   ├── web.py          # 共享静态文件服务
 │   ├── static/         # Vite 构建输出（G6 Dashboard）
-│   ├── service.py      # 系统服务管理
 │   └── proxy.py        # 系统代理配置（Windows 注册表 + 环境变量）
 ├── web/                # 前端源码（Bun + Vite 8 + TS + G6）
 │   ├── package.json
@@ -262,7 +262,7 @@ python -c "from mops.dashboard import MopsDashboard"
 
 **依赖方向**：
 ```
-protocol.py  ←── server, client, dashboard, discovery, scheduler, tunnel, service, __main__
+protocol.py  ←── server, client, dashboard, discovery, scheduler, tunnel, __main__
 stats/*      ←── 各组件按需 import 需要的子模块
 tunnel.py    ←── server.py, client.py
 scheduler.py ←── client.py, dashboard.py, discovery.py
