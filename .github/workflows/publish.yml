@@ -1,40 +1,36 @@
-name: Publish to PyPI
+name: Publish Release
 
 on:
   push:
     tags:
-      - "v*"
+      - 'v*'
   workflow_dispatch:
 
 jobs:
-  pypi-publish:
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Build frontend
-        working-directory: web
-        run: |
-          bun install
-          bun run build
-
-      - name: Build package
-        run: uv build
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-
-  github-release:
-    needs: pypi-publish
-    runs-on: ubuntu-latest
+  release:
+    name: Build & Release mops.exe
+    runs-on: windows-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: softprops/action-gh-release@v2
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
+          go-version: '1.26.x'
+
+      - name: Build Executable & Run Tests
+        run: powershell -ExecutionPolicy Bypass -File .\build.ps1
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: mops.exe
           generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

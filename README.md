@@ -1,343 +1,90 @@
 # MOPS
 
-多节点出口代理系统 — 轻量级分布式出口负载均衡系统。
+**MOPS (Multi-node Outbound Proxy System)** —— 面向 Windows 平台的 Go 语言高性能单体代理系统 (`mops.exe`)。
 
-通过局域网内多台设备的 IP 聚合，绕过网关单 IP 限速。
+静态链接引用 GOST v3 内存级代理内核，通过局域网内多台设备的 IP 聚合与 Round-Robin 轮询，绕过网关单 IP 限速。
 
 ## 功能特性
 
-- **多协议支持** — 同一端口自动识别 SOCKS5 / HTTP CONNECT / HTTP 代理（GET/POST），类似 Clash
-- **零配置发现** — 基于 mDNS，Server 广播、Client 自动发现，无需手动配置节点列表
-- **负载均衡** — `random`（随机）/ `hash`（会话保持）两种策略
-- **健康检查** — mDNS TTL 60s + 被动熔断（连续失败自动隔离，30s 后恢复）
-- **连接追踪** — Server 端记录所有 client 连接（IP、目标、状态），最近 5 分钟滚动历史
-- **系统代理** — 一键设置/取消系统全局代理（Windows / macOS / Linux）
-- **REST API** — 实时查看节点状态、流量统计、连接信息
-- **Web Dashboard** — AntV G6 拓扑图 + 暗色科技感界面，1s 轮询自动刷新
+- **静态链接 GOST 内核** — 内存级代理，零外部 `gost.exe` 子进程，零 IPC 开销
+- **零配置 mDNS 组网** — 基于原生 Go zeroconf，自动广播并动态更新 Round-Robin 节点轮询链
+- **Windows 原生系统服务** — 支持无黑框静默运行 (`Services.msc`)，开机常驻守护
+- **Windows 注册表系统代理** — 一键开启/关闭/查看 Windows 系统全局代理
+- **Tailscale 风格 CLI 视图** — `mops status` / `mops status -w` 在终端中以美观表格实时显示集群节点与总网速
+- **单一可执行文件** — 解压即用，无 Python 运行库与 Web 依赖
 
-## 安装
+## 极速构建
 
-```bash
-# uv (推荐)
-uv tool install carrot-mops
+```powershell
+# 使用 PowerShell 脚本极速编译
+.\build.ps1
 
-# pip
-pip install carrot-mops
+# 或使用标准 go build
+go build -o mops.exe ./cmd/mops
 ```
 
-## 快速开始
+## CLI 命令说明
 
-```bash
-# 安装 Python 依赖
-uv sync
+```powershell
+# 启动 MOPS 代理节点
+.\mops.exe run
 
-# 安装前端依赖（可选，仅开发 Dashboard 时需要）
-cd web && bun install && bun run build && cd ..
+# 查看 Tailscale 风格集群状态 (加上 -w 可实时轮询刷新)
+.\mops.exe status -w
 
-# 出口机启动 Server（对外暴露出口）
-uv run python -m mops run server
+# Windows 系统代理控制
+.\mops.exe proxy on
+.\mops.exe proxy off
+.\mops.exe proxy status
 
-# 主力机启动 Client（本机代理入口）
-uv run python -m mops run client
-
-# 或者混合模式（同时跑 Server + Client）
-uv run python -m mops run both
+# Windows 原生系统服务守护
+.\mops.exe service install
+.\mops.exe service start
+.\mops.exe service stop
+.\mops.exe service uninstall
 ```
 
-Client 启动后，默认监听 `127.0.0.1:10081`，自动发现局域网内的 Server 节点。
-
-## CLI 参考
-
-```bash
-mops                                              # 默认 both 模式前台启动
-mops run        [--mode both] [--server-port 10080] [--client-port 10081] [--api-port 10082]
-                 [--strategy random|hash] [--listen 127.0.0.1] [--weight 1] [--advertise <ip>]
-                 [-c config.json] [-b]
-mops stop                                            # 停止后台进程
-mops dashboard     [--port 10100]                     # 独立 Dashboard
-mops proxy on      [host:port]   [--host] [--port]  # 设置系统全局代理
-mops proxy off                                     # 取消系统全局代理
-mops proxy status                                  # 查看代理状态
-```
-
-### 参数说明
+### 常用参数
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `--mode` | 运行模式: `server` / `client` / `both` | `both` |
 | `--server-port` | Server TCP 监听端口 | `10080` |
-| `--client-port` | Client 代理监听端口 | `10081` |
-| `--api-port` | REST API 监听端口 | `10082` |
-| `--listen` | Client 本地绑定地址 | `127.0.0.1` |
-| `--advertise` | mDNS 广播地址（通过路由表自动检测） | `auto` |
-| `--strategy` | 负载均衡策略: `random` 或 `hash` | `random` |
-| `--weight` | Server 权重 (仅 server 模式) | `1` |
-| `-b, --background` | 后台运行并退出 | 前台 |
-| `-c, --config` | 从 JSON 配置文件加载参数 | — |
+| `--client-port` | Client SOCKS5 代理端口 | `10081` |
+| `--listen` | 本地绑定地址 | `127.0.0.1` |
+| `--advertise` | mDNS 广播 IP | 自动检测 |
+| `--strategy` | 负载均衡策略 (`random` / `hash`) | `random` |
+
 
 ### 端口分配
 
 | 组件 | 参数 | 默认端口 |
 |------|------|----------|
 | Server TCP | `--server-port` | 10080 |
-| Client 代理 | `--client-port` | 10081 |
-| REST API | `--api-port` | 10082 |
-| Dashboard | `dashboard --port` | 10100 |
+| Client SOCKS5 | `--client-port` | 10081 |
 
-### 配置文件
+---
 
-```bash
-mops run -c config.json               # 从文件加载所有参数
-mops run -c config.json --strategy hash  # 文件 + 参数覆盖
-```
-
-配置文件格式（JSON）：
-```json
-{
-  "mode": "both",
-  "server_port": 10080,
-  "client_port": 10090,
-  "api_port": 10100,
-  "listen": "127.0.0.1",
-  "advertise": "",
-  "strategy": "random",
-  "weight": 1
-}
-```
-
-合并优先级：CLI 参数 > `-c` 文件 > 默认值
-
-## 代理协议
-
-同一端口，自动识别协议类型，无需手动配置：
-
-| 协议 | 客户端请求 | 用途 |
-|------|------------|------|
-| **SOCKS5** | `0x05 0x01 0x00` 握手 | TCP 代理（HTTP/HTTPS/任意 TCP） |
-| **HTTP CONNECT** | `CONNECT host:port HTTP/1.1` | HTTPS 隧道 |
-| **HTTP 代理** | `GET http://host/path HTTP/1.1` | 普通 HTTP 代理（GET/POST 等） |
-
-## 使用示例
+## 代理协议与测试
 
 ### curl 测试
 
-```bash
-# SOCKS5 代理
-curl.exe -x socks5://127.0.0.1:10081 ifconfig.me
-
-# HTTP 代理（支持 HTTP 和 HTTPS）
-curl.exe -x http://127.0.0.1:10081 ifconfig.me
-curl.exe -x http://127.0.0.1:10081 https://ifconfig.me
-
-# 不走代理（直连对比）
-curl.exe ifconfig.me
+```powershell
+# SOCKS5 代理请求
+curl.exe -x socks5://127.0.0.1:10081 https://ifconfig.me
 ```
 
-> **提示**: Windows 上如果系统已配置代理（如 Clash 在 `127.0.0.1:7890`），测试时需加 `--noproxy "*"` 绕过。
+---
 
-### 设置系统代理
+## 负载均衡与自动发现
 
-```bash
-# 开启系统全局代理（默认 127.0.0.1:10081）
-mops proxy on
-
-# 指定地址（位置参数）
-mops proxy on 192.168.1.100:20081
-
-# 分开指定 host 和 port
-mops proxy on --host 192.168.1.100 --port 20081
-
-# 关闭并恢复原设置
-mops proxy off
-
-# 查看当前代理状态
-mops proxy status
-```
-
-### Clash / Clash Verge 配置
-
-1. 在 Clash Verge 中，选中订阅节点 → 点「编辑」，添加以下内容：
-
-```yaml
-prepend:
-  - type: 'socks5'
-    name: 'SOCKS5 127.0.0.1:10081'
-    server: '127.0.0.1'
-    port: 10081
-```
-
-2. 保存后，在代理页面右上角「链式代理」中选择 `SOCKS5 127.0.0.1:10081` 节点
-
-> **说明**: `prepend` 会在订阅节点前插入 MOPS 节点，通过链式代理让流量先走 MOPS，再走原有代理节点。
-
-### Web Dashboard
-
-启动服务后，浏览器访问 `http://127.0.0.1:10082/` 查看可视化面板：
-
-![Dashboard](img/dashboard.png)
-
-- **智能拓扑图** — AntV G6 5.x 拓扑图，dagre 从左到右布局，自动发现网络中的 Server 和 Client 节点
-- **两种模式**：
-  - **集成模式**（`mops run both`）：显示完整的 `App → Client → Server → Internet` 链路
-  - **独立模式**（`mops dashboard`）：从网络推断 Client 节点，仅显示 `Client → Server → Internet`
-- **语义缩放**：节点少时显示 hostname + IP:port 详情，节点多时自动隐藏标签避免重叠
-- **活跃连接** — 橙色流动虚线动画，1 秒自动刷新
-- **节点状态** — 绿色活跃、灰色熔断、暗色离线，实时更新
-
-### REST API
-
-| 端点 | 说明 |
+| 特性 | 说明 |
 |------|------|
-| `GET /` | Web Dashboard 页面 |
-| `GET /api/server` | Server 状态 + 流量 + 连接信息 JSON |
-| `GET /api/dashboard` | 同 `/api/server`（别名） |
+| **Round-Robin** | 默认在所有 ONLINE 节点间加权轮询平摊流量 |
+| **mDNS 自动发现** | 基于 zeroconf 原生 Go 广播，无需手动配置 IP |
 
-<details>
-<summary>响应示例</summary>
-
-```json
-{
-  "nodes": [
-    {
-      "ip": "192.168.1.100",
-      "port": 10080,
-      "api_port": 10082,
-      "hostname": "Carrot-PC",
-      "fails": 0,
-      "status": "active",
-      "total_up": 1024000,
-      "total_down": 5120000,
-      "active_conns": 3,
-      "connections": [],
-      "speed_up": 1024,
-      "speed_down": 5120
-    }
-  ],
-  "connections": [
-    {
-      "conn_id": "1",
-      "client_ip": "192.168.1.50",
-      "target_host": "example.com",
-      "target_port": 443,
-      "status": "active",
-      "started_at": 12345.6
-    }
-  ],
-  "total_up": 1024000,
-  "total_down": 5120000,
-  "speed_up": 1024,
-  "speed_down": 5120,
-  "active_conns": 3,
-  "uptime": 3600,
-  "mode": "both",
-  "strategy": "random",
-  "local_client": {"ip": "127.0.0.1", "port": 10081}
-}
-```
-
-</details>
-
-> **注意**: `/api/client` 已移除。Client 端不再提供独立 API，所有信息通过 Server 的 `/api/server` 获取。
-
-## 负载均衡
-
-| 策略 | 说明 |
-|------|------|
-| `random` | 随机选择节点，流量最均匀 |
-| `hash` | 按 `client_ip:target_host` 哈希，会话保持 |
-
-## 健康检查
-
-- **mDNS 广播** — Server 每 60 秒刷新 TTL，Client 自动感知节点加入/离开
-- **被动熔断** — 连续 2 次连接失败 → 节点移入观察池，30 秒后自动恢复
-
-## 后台运行
-
-```bash
-# 后台启动
-mops run -b
-
-# 停止后台进程
-mops stop
-
-# 查看日志
-tail -f ~/.mops/logs/mops.log
-```
-
-日志自动保存到 `~/.mops/logs/mops.log`（10MB 轮转，保留 7 天），PID 记录到 `~/.mops/logs/mops.pid`。
-
-## 开发
-
-```bash
-# Python
-uv sync --extra dev
-uv run pytest tests/ -v --cov=mops
-uv run python build.py          # Nuitka 打包
-
-# 前端 Dashboard
-cd web
-bun install                     # 安装依赖（Bun）
-bun run dev                     # 开发模式（热更新）
-bun run build                   # 构建到 src/mops/static/
-```
-
-### 项目结构
-
-```
-MOPS/
-├── src/mops/
-│   ├── __init__.py       # 版本号
-│   ├── __main__.py       # CLI 入口
-│   ├── protocol.py       # 共享常量 + NodeInfo dataclass
-│   ├── stats/            # 统计模块（按职责拆分）
-│   │   ├── __init__.py   # 重新导出
-│   │   ├── traffic.py    # TrafficStats
-│   │   ├── connection.py # ConnectionTracker
-│   │   ├── registry.py   # NodeRegistry
-│   │   └── history.py    # TrafficHistory
-│   ├── tunnel.py         # 双向流量拷贝
-│   ├── server.py         # TCP 透传 + mDNS + 连接追踪
-│   ├── client.py         # SOCKS5 + HTTP CONNECT + HTTP 代理
-│   ├── discovery.py      # mDNS 服务浏览
-│   ├── scheduler.py      # 负载均衡 + 熔断
-│   ├── dashboard.py      # 独立 Dashboard 服务
-│   ├── api.py            # REST API + 统一 /api/dashboard 响应
-│   ├── web.py            # 共享静态文件服务
-│   ├── static/           # Vite 构建输出（G6 Dashboard）
-│   │   ├── index.html
-│   │   ├── dashboard.js
-│   │   └── dashboard.css
-│   └── proxy.py          # 系统代理配置
-├── web/                  # 前端源码（Bun + Vite + TS + G6）
-│   ├── package.json
-│   ├── vite.config.ts
-│   ├── vitest.config.ts
-│   ├── playwright.config.ts
-│   ├── index.html        # 双栏布局 (70/30)
-│   └── src/
-│       ├── main.ts       # 入口：1s 轮询 /api/dashboard
-│       ├── types.ts      # TypeScript 接口
-│       ├── format.ts     # 格式化函数
-│       ├── data.ts       # API 获取 + toTopo 转换
-│       ├── topo.ts       # G6 拓扑图（语义缩放 + 流动虚线动画）
-│       ├── graph.ts      # G6 拓扑图模块（替代实现）
-│       ├── cards.ts      # 服务器状态卡片
-│       ├── style.css     # 工业暗色主题
-│       ├── format.test.ts   # 格式化测试 (11)
-│       ├── toTopo.test.ts   # 数据转换测试 (16)
-│       └── graph.test.ts    # Graph 模块测试 (10)
-│   └── e2e/              # Playwright E2E 渲染测试
-│       ├── dashboard.spec.ts    # 基础 Dashboard 测试 (7)
-│       ├── multi-node.spec.ts   # 多节点渲染测试 (16)
-│       ├── multi-client-viz.spec.ts # 多客户端可视化测试 (5)
-│       └── fixtures/mock-data.ts # 测试数据
-├── tests/                # 268 个后端测试 + 37 个前端单元测试 + 28 个 E2E 渲染测试，≥85% 覆盖率
-├── build.py              # Nuitka 打包脚本
-├── pyproject.toml        # 项目配置 (hatchling)
-├── .gitignore
-└── LICENSE               # Apache License 2.0
-```
+---
 
 ## 许可证
 
 [Apache License 2.0](LICENSE)
+

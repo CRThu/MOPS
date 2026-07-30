@@ -1,52 +1,28 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-dist/
-build/
+# Go build executables & binaries
+*.exe
+*.exe.manifest
+*.dll
+*.so
+*.dylib
+mops.exe
 
-# Virtual environment
-.venv/
-
-# Coverage
+# Go test coverage output
+*.out
+coverage.out
+coverage/
 .coverage
-htmlcov/
-
-# pytest
-.pytest_cache/
 
 # Logs
 *.log
+logs/
 
-# Editor
+# IDE & Editor files
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS
+# OS temporary files
 Thumbs.db
 Desktop.ini
-.DS_Store
-
-# Frontend build
-web/node_modules/
-
-# Playwright
-web/test-results/
-web/playwright-report/
-web/e2e/*.png
-
-# Nuitka build output
-*.exe
-*.dll
-*.so
-*.pyd
-*.manifest
-*.exp
-*.lib
-*.obj
-*.pdb
-*.ilk
-
-logs/
+.DS_Store

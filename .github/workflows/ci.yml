@@ -2,43 +2,22 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
-    branches: [main]
+    branches: [main, master]
 
 jobs:
-  python-test:
-    runs-on: ubuntu-latest
+  test-and-build:
+    runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
-      - run: uv sync --all-extras
-      - run: uv run pytest tests/ -v --cov=mops --cov-report=xml
-      - uses: codecov/codecov-action@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          file: coverage.xml
+          go-version: '1.26.x'
 
-  frontend-test:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-      - run: bun install
-      - run: bun run test
-      - run: bunx playwright install chromium --with-deps
-      - run: bun run build
-      - run: bun run test:e2e
+      - name: Run Build and Tests
+        run: powershell -ExecutionPolicy Bypass -File .\build.ps1
 
-  frontend-build:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-      - run: bun install
-      - run: bun run build
