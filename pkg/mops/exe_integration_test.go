@@ -18,14 +18,27 @@ import (
 )
 
 func TestExecutableBlackbox(t *testing.T) {
-	// Look for compiled mops.exe in repo root
-	exePath, err := filepath.Abs("../../mops.exe")
-	if err != nil || os.IsNotExist(err) {
-		exePath, err = filepath.Abs("mops.exe")
-		if err != nil || os.IsNotExist(err) {
-			t.Skip("mops.exe not built yet, skipping binary blackbox test")
-			return
+	// Look for compiled mops.exe in current or parent repo directories
+	var exePath string
+	candidates := []string{
+		"bin/mops.exe",
+		"../bin/mops.exe",
+		"../../bin/mops.exe",
+		"mops.exe",
+	}
+	for _, c := range candidates {
+		abs, err := filepath.Abs(c)
+		if err == nil {
+			if _, err := os.Stat(abs); err == nil {
+				exePath = abs
+				break
+			}
 		}
+	}
+
+	if exePath == "" {
+		t.Skip("mops.exe not built yet, skipping binary blackbox test")
+		return
 	}
 
 	t.Run("Exec_Help", func(t *testing.T) {
@@ -50,11 +63,7 @@ func TestExecutableBlackbox(t *testing.T) {
 	})
 
 	t.Run("Exec_Full_E2E_MultiNode_And_Failover", func(t *testing.T) {
-		// 1. Build binary to ensure latest build for E2E
-		buildCmd := exec.Command("go", "build", "-o", exePath, "../../cmd/mops")
-		require.NoError(t, buildCmd.Run(), "failed to build mops.exe for E2E test")
-
-		// 2. Start Target Echo TCP Server
+		// 1. Start Target Echo TCP Server
 		freeP := getFreePort()
 		destListener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", freeP))
 		if err != nil {

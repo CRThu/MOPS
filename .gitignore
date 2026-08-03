@@ -4,7 +4,7 @@
 *.dll
 *.so
 *.dylib
-mops.exe
+bin/
 
 # Go test coverage output
 *.out
@@ -25,4 +25,4 @@ logs/
 # OS temporary files
 Thumbs.db
 Desktop.ini
-.DS_Store
+.DS_Store
