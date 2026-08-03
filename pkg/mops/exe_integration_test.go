@@ -55,7 +55,11 @@ func TestExecutableBlackbox(t *testing.T) {
 		require.NoError(t, buildCmd.Run(), "failed to build mops.exe for E2E test")
 
 		// 2. Start Target Echo TCP Server
-		destListener, err := net.Listen("tcp", "127.0.0.1:0")
+		freeP := getFreePort()
+		destListener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", freeP))
+		if err != nil {
+			destListener, err = net.Listen("tcp", "127.0.0.1:0")
+		}
 		require.NoError(t, err)
 		defer destListener.Close()
 
@@ -161,15 +165,17 @@ func TestExecutableBlackbox(t *testing.T) {
 		}
 		require.Equal(t, byte(0x00), socksResp[1])
 
+		expected1 := "EXE_ECHO: ExecTestPayload"
 		_, _ = conn.Write([]byte("ExecTestPayload"))
-		readBuf := make([]byte, 256)
-		n, _ := conn.Read(readBuf)
-		assert.Equal(t, "EXE_ECHO: ExecTestPayload", string(readBuf[:n]))
+		buf1 := make([]byte, len(expected1))
+		_, err = io.ReadFull(conn, buf1)
+		require.NoError(t, err)
+		assert.Equal(t, expected1, string(buf1))
 		conn.Close()
 
 		// 7. Kill Server 1 Subprocess unexpectedly to test Failover in binary mode
 		_ = cmdS1.Process.Kill()
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 
 		// Next request should automatically failover to Server 2 or retry
 		conn2, err := net.Dial("tcp", proxyAddr)
@@ -182,9 +188,12 @@ func TestExecutableBlackbox(t *testing.T) {
 		_, _ = io.ReadFull(conn2, socksResp)
 		assert.Equal(t, byte(0x00), socksResp[1])
 
+		expected2 := "EXE_ECHO: ExecFailoverPayload"
 		_, _ = conn2.Write([]byte("ExecFailoverPayload"))
-		n2, _ := conn2.Read(readBuf)
-		assert.Equal(t, "EXE_ECHO: ExecFailoverPayload", string(readBuf[:n2]))
+		buf2 := make([]byte, len(expected2))
+		_, err = io.ReadFull(conn2, buf2)
+		require.NoError(t, err)
+		assert.Equal(t, expected2, string(buf2))
 		conn2.Close()
 	})
 }

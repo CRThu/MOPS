@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,65 +13,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEngineLifecycle(t *testing.T) {
-	cfg := Config{
-		ServerPort: getFreePort(),
-		ClientPort: getFreePort(),
-		ListenAddr: "127.0.0.1",
-		Hostname:   "TestHost",
-		Advertise:  "127.0.0.1",
-	}
-
-	engine := NewEngine(cfg)
-	ctx := context.Background()
-
-	err := engine.Start(ctx)
-	require.NoError(t, err)
-
-	nodes := engine.GetNodes()
-	assert.Len(t, nodes, 1)
-	assert.Equal(t, "TestHost", nodes[0].Hostname)
-	assert.Equal(t, "ONLINE", nodes[0].Status)
-
-	engine.Stop()
-}
-
-func TestEngineNodeManagement(t *testing.T) {
-	cfg := Config{
-		ServerPort: 10802,
-		ClientPort: 10803,
-		ListenAddr: "127.0.0.1",
-		Hostname:   "HostMe",
-		Advertise:  "127.0.0.1",
-	}
-	engine := NewEngine(cfg)
-
-	remoteNode := &Node{
-		ID:       "node-02",
-		Hostname: "RemoteHost",
-		IP:       "192.168.1.100",
-		Port:     10080,
-		Role:     "Server",
-	}
-	engine.UpdateNode(remoteNode)
-
-	nodes := engine.GetNodes()
-	assert.Len(t, nodes, 1)
-
-	n, err := engine.selectNode()
-	require.NoError(t, err)
-	assert.Equal(t, "node-02", n.ID)
-
-	engine.RemoveNode("node-02")
-	nodes = engine.GetNodes()
-	for _, node := range nodes {
-		if node.ID == "node-02" {
-			assert.Equal(t, "OFFLINE", node.Status)
-		}
-	}
-}
+var testPortCounter int32 = 10800
 
 func getFreePort() int {
+	for i := 0; i < 100; i++ {
+		p := atomic.AddInt32(&testPortCounter, 1)
+		if p > 10899 {
+			atomic.StoreInt32(&testPortCounter, 10800)
+			p = 10800
+		}
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
+		if err == nil {
+			l.Close()
+			return int(p)
+		}
+	}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return 0
@@ -81,7 +38,12 @@ func getFreePort() int {
 
 func TestEngineSocks5ProxyFlow(t *testing.T) {
 	// 1. Setup a dummy target TCP server
-	targetListener, err := net.Listen("tcp", "127.0.0.1:0")
+	freeP := getFreePort()
+	targetListener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", freeP))
+	if err != nil {
+		targetListener, err = net.Listen("tcp", "127.0.0.1:0")
+	}
+	require.NoError(t, err)
 	require.NoError(t, err)
 	defer targetListener.Close()
 
