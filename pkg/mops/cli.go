@@ -3,8 +3,10 @@ package mops
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -19,6 +21,7 @@ func Execute() error {
 		listenAddr string
 		advertise  string
 		strategy   string
+		nodes      []string
 		watch      bool
 	)
 
@@ -39,7 +42,7 @@ func Execute() error {
 				Hostname:   hostname,
 				Advertise:  advertise,
 				Strategy:   strategy,
-			})
+			}, nodes)
 		},
 	}
 
@@ -49,6 +52,7 @@ func Execute() error {
 	rootCmd.PersistentFlags().StringVar(&listenAddr, "listen", "127.0.0.1", "Client Listen IP")
 	rootCmd.PersistentFlags().StringVar(&advertise, "advertise", "", "mDNS Advertise IP")
 	rootCmd.PersistentFlags().StringVar(&strategy, "strategy", "random", "Load balance strategy")
+	rootCmd.PersistentFlags().StringSliceVar(&nodes, "node", nil, "Explicit remote node IP:Port (e.g. 192.168.132.72:10080)")
 
 	// run command
 	runCmd := &cobra.Command{
@@ -62,7 +66,7 @@ func Execute() error {
 				Hostname:   hostname,
 				Advertise:  advertise,
 				Strategy:   strategy,
-			})
+			}, nodes)
 		},
 	}
 	rootCmd.AddCommand(runCmd)
@@ -180,7 +184,7 @@ func Execute() error {
 	return rootCmd.Execute()
 }
 
-func runDaemon(cfg Config) error {
+func runDaemon(cfg Config, explicitNodes []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -190,6 +194,22 @@ func runDaemon(cfg Config) error {
 	}
 	defer engine.Stop()
 
+	for _, nStr := range explicitNodes {
+		host, pStr, err := net.SplitHostPort(nStr)
+		if err == nil {
+			port, _ := strconv.Atoi(pStr)
+			nodeID := fmt.Sprintf("REMOTE@%s:%d", host, port)
+			engine.UpdateNode(&Node{
+				ID:       nodeID,
+				Hostname: "REMOTE-NODE",
+				IP:       host,
+				Port:     port,
+				Role:     "Server",
+				Status:   "ONLINE",
+			})
+		}
+	}
+
 	discovery := NewDiscovery(engine)
 	if err := discovery.Start(ctx); err != nil {
 		return err
@@ -198,6 +218,11 @@ func runDaemon(cfg Config) error {
 
 	fmt.Printf("MOPS Proxy running on Server :%d, Client SOCKS5 %s:%d (Strategy: %s)\n",
 		cfg.ServerPort, cfg.ListenAddr, cfg.ClientPort, cfg.Strategy)
+	if cfg.Advertise != "" {
+		fmt.Printf("[INFO] Outbound LAN IP: %s (Specified via --advertise)\n", engine.GetAdvertiseIP())
+	} else {
+		fmt.Printf("[INFO] Outbound LAN IP: %s (Auto-detected physical interface)\n", engine.GetAdvertiseIP())
+	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)

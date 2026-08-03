@@ -76,14 +76,7 @@ func (d *Discovery) Start(ctx context.Context) error {
 	}
 
 	// 2. Browse mDNS Services
-	validIfaces := getMulticastInterfaces()
-	var resolver *zeroconf.Resolver
-	var err error
-	if len(validIfaces) > 0 {
-		resolver, err = zeroconf.NewResolver(zeroconf.SelectIfaces(validIfaces))
-	} else {
-		resolver, err = zeroconf.NewResolver(nil)
-	}
+	resolver, err := zeroconf.NewResolver(nil)
 	if err != nil {
 		return fmt.Errorf("failed to create zeroconf resolver: %w", err)
 	}
@@ -95,6 +88,20 @@ func (d *Discovery) Start(ctx context.Context) error {
 	if err := resolver.Browse(ctx, ServiceType, "local.", entries); err != nil {
 		return fmt.Errorf("failed to browse zeroconf services: %w", err)
 	}
+
+	// Periodic mDNS re-query every 5s to discover new/late-joining LAN nodes
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = resolver.Browse(ctx, ServiceType, "local.", entries)
+			}
+		}
+	}()
 
 	return nil
 }
@@ -135,6 +142,10 @@ func isExcludedIP(ip net.IP) bool {
 	}
 	// Exclude Tailscale / CGNAT range (100.64.0.0/10)
 	if ip4[0] == 100 && (ip4[1] >= 64 && ip4[1] <= 127) {
+		return true
+	}
+	// Exclude Hyper-V / WSL / Docker virtual subnet (172.16.0.0/12)
+	if ip4[0] == 172 && (ip4[1] >= 16 && ip4[1] <= 31) {
 		return true
 	}
 	return false
@@ -200,11 +211,13 @@ func (d *Discovery) handleEntries(ctx context.Context, entries <-chan *zeroconf.
 			}
 			node := parseServiceEntry(entry)
 			if node != nil {
-				// Filter out self node by IP and ServerPort
-				isSelf := (node.IP == d.engine.cfg.Advertise || node.IP == "127.0.0.1") &&
-					node.Port == d.engine.cfg.ServerPort &&
-					node.Hostname == d.engine.cfg.Hostname
+				selfIP := d.engine.cfg.Advertise
+				if selfIP == "" {
+					selfIP, _ = GetOutboundIP()
+				}
+				isSelf := (node.IP == selfIP || node.IP == "127.0.0.1") && node.Port == d.engine.cfg.ServerPort
 				if !isSelf {
+					fmt.Printf("[mDNS Auto-Discovered Node] Hostname: %s, IP: %s, Port: %d\n", node.Hostname, node.IP, node.Port)
 					d.engine.UpdateNode(node)
 				}
 			}
@@ -235,7 +248,24 @@ func parseServiceEntry(entry *zeroconf.ServiceEntry) *Node {
 
 	ip := ""
 	if len(entry.AddrIPv4) > 0 {
-		ip = entry.AddrIPv4[0].String()
+		for _, addrIPv4 := range entry.AddrIPv4 {
+			ip4Str := addrIPv4.String()
+			if strings.HasPrefix(ip4Str, "192.168.") || strings.HasPrefix(ip4Str, "10.") {
+				ip = ip4Str
+				break
+			}
+		}
+		if ip == "" {
+			for _, addrIPv4 := range entry.AddrIPv4 {
+				if !isExcludedIP(addrIPv4) {
+					ip = addrIPv4.String()
+					break
+				}
+			}
+		}
+		if ip == "" {
+			ip = entry.AddrIPv4[0].String()
+		}
 	} else if len(entry.AddrIPv6) > 0 {
 		ip = entry.AddrIPv6[0].String()
 	}
@@ -297,13 +327,13 @@ func GetOutboundIP() (string, error) {
 				}
 
 				if strings.HasPrefix(ipStr, "192.168.") {
-					score += 50
+					score += 1000
 				} else if strings.HasPrefix(ipStr, "10.") {
-					score += 40
+					score += 800
 				} else if isPrivate172(ip4) {
-					score += 30
-				} else {
 					score += 10
+				} else {
+					score += 5
 				}
 
 				candidates = append(candidates, candidate{ip: ipStr, score: score})
@@ -320,11 +350,11 @@ func GetOutboundIP() (string, error) {
 		}
 	}
 
-	if bestIP != "" {
+	if bestIP != "" && bestScore > 20 {
 		return bestIP, nil
 	}
 
-	// Fallback to UDP dial if no candidate found
+	// Fallback to UDP dial
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err == nil {
 		defer conn.Close()
@@ -336,6 +366,11 @@ func GetOutboundIP() (string, error) {
 			}
 		}
 	}
+
+	if bestIP != "" {
+		return bestIP, nil
+	}
+
 	return "", fmt.Errorf("no valid outbound IP found")
 }
 

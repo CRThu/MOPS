@@ -215,6 +215,13 @@ func (e *Engine) GetNodes() []*Node {
 	return res
 }
 
+// GetAdvertiseIP returns the current advertise IP.
+func (e *Engine) GetAdvertiseIP() string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.cfg.Advertise
+}
+
 // GetSpeed returns current total speed up/down (bytes/s).
 func (e *Engine) GetSpeed() (float64, float64) {
 	e.mu.RLock()
@@ -417,6 +424,8 @@ func (e *Engine) handleSocks5Conn(conn net.Conn) {
 		return
 	}
 	defer serverConn.Close()
+
+	fmt.Printf("[MOPS PROXY] Selected Node [%s] (%s:%d) for target [%s]\n", node.Hostname, node.IP, node.Port, targetHost)
 
 	// Send Header
 	hdr := Header{
