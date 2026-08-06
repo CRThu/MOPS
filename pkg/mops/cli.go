@@ -18,6 +18,7 @@ func Execute() error {
 	var (
 		serverPort int
 		clientPort int
+		apiPort    int
 		listenAddr string
 		advertise  string
 		strategy   string
@@ -38,6 +39,7 @@ func Execute() error {
 			return runDaemon(Config{
 				ServerPort: serverPort,
 				ClientPort: clientPort,
+				APIPort:    apiPort,
 				ListenAddr: listenAddr,
 				Hostname:   hostname,
 				Advertise:  advertise,
@@ -49,6 +51,7 @@ func Execute() error {
 	rootCmd.PersistentFlags().StringVar(&hostname, "hostname", defaultHostname, "Node Hostname")
 	rootCmd.PersistentFlags().IntVar(&serverPort, "server-port", 10080, "Server TCP Port")
 	rootCmd.PersistentFlags().IntVar(&clientPort, "client-port", 10081, "Client SOCKS5 Proxy Port")
+	rootCmd.PersistentFlags().IntVar(&apiPort, "api-port", 10082, "RESTful API HTTP Port")
 	rootCmd.PersistentFlags().StringVar(&listenAddr, "listen", "127.0.0.1", "Client Listen IP")
 	rootCmd.PersistentFlags().StringVar(&advertise, "advertise", "", "mDNS Advertise IP")
 	rootCmd.PersistentFlags().StringVar(&strategy, "strategy", "random", "Load balance strategy")
@@ -62,6 +65,7 @@ func Execute() error {
 			return runDaemon(Config{
 				ServerPort: serverPort,
 				ClientPort: clientPort,
+				APIPort:    apiPort,
 				ListenAddr: listenAddr,
 				Hostname:   hostname,
 				Advertise:  advertise,
@@ -79,6 +83,7 @@ func Execute() error {
 			cfg := Config{
 				ServerPort: serverPort,
 				ClientPort: clientPort,
+				APIPort:    apiPort,
 				ListenAddr: listenAddr,
 				Hostname:   hostname,
 				Advertise:  advertise,
@@ -166,6 +171,7 @@ func Execute() error {
 			cfg := Config{
 				ServerPort: serverPort,
 				ClientPort: clientPort,
+				APIPort:    apiPort,
 				ListenAddr: listenAddr,
 				Hostname:   hostname,
 				Advertise:  advertise,
@@ -216,8 +222,8 @@ func runDaemon(cfg Config, explicitNodes []string) error {
 	}
 	defer discovery.Stop()
 
-	fmt.Printf("MOPS Proxy running on Server :%d, Client SOCKS5 %s:%d (Strategy: %s)\n",
-		cfg.ServerPort, cfg.ListenAddr, cfg.ClientPort, cfg.Strategy)
+	fmt.Printf("MOPS Proxy running on Server :%d, Client SOCKS5 %s:%d, REST API :%d (Strategy: %s)\n",
+		cfg.ServerPort, cfg.ListenAddr, cfg.ClientPort, cfg.APIPort, cfg.Strategy)
 	if cfg.Advertise != "" {
 		fmt.Printf("[INFO] Outbound LAN IP: %s (Specified via --advertise)\n", engine.GetAdvertiseIP())
 	} else {

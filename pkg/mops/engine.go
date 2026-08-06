@@ -40,6 +40,7 @@ type Node struct {
 type Config struct {
 	ServerPort int
 	ClientPort int
+	APIPort    int
 	ListenAddr string
 	Hostname   string
 	Advertise  string
@@ -55,6 +56,7 @@ type Engine struct {
 
 	serverListener net.Listener
 	clientListener net.Listener
+	apiServer      *APIServer
 
 	running bool
 	cancel  context.CancelFunc
@@ -147,6 +149,21 @@ func (e *Engine) Start(ctx context.Context) error {
 		go e.acceptClient(l)
 	}
 
+	// Start RESTful API Server
+	if e.cfg.APIPort > 0 {
+		apiSrv := NewAPIServer(e)
+		if err := apiSrv.Start(e.cfg.APIPort, e.cfg.ListenAddr); err != nil {
+			if e.serverListener != nil {
+				e.serverListener.Close()
+			}
+			if e.clientListener != nil {
+				e.clientListener.Close()
+			}
+			return fmt.Errorf("failed to start API listener on port %d: %w", e.cfg.APIPort, err)
+		}
+		e.apiServer = apiSrv
+	}
+
 	// Speed calculation loop
 	go e.speedLoop(ctx)
 
@@ -164,6 +181,10 @@ func (e *Engine) Stop() {
 	e.running = false
 	if e.cancel != nil {
 		e.cancel()
+	}
+
+	if e.apiServer != nil {
+		e.apiServer.Stop()
 	}
 
 	if e.serverListener != nil {

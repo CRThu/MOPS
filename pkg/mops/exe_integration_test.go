@@ -18,13 +18,12 @@ import (
 )
 
 func TestExecutableBlackbox(t *testing.T) {
-	// Look for compiled mops.exe in current or parent repo directories
+	// Look for compiled mops.exe in bin/ directory
 	var exePath string
 	candidates := []string{
 		"bin/mops.exe",
 		"../bin/mops.exe",
 		"../../bin/mops.exe",
-		"mops.exe",
 	}
 	for _, c := range candidates {
 		abs, err := filepath.Abs(c)
@@ -36,8 +35,32 @@ func TestExecutableBlackbox(t *testing.T) {
 		}
 	}
 
+	// Auto-build into bin/mops.exe if missing
 	if exePath == "" {
-		t.Skip("mops.exe not built yet, skipping binary blackbox test")
+		binDir, err := filepath.Abs("bin")
+		if err == nil {
+			_ = os.MkdirAll(binDir, 0755)
+			target := filepath.Join(binDir, "mops.exe")
+			buildCmd := exec.Command("go", "build", "-o", target, "./cmd/mops")
+			if buildCmd.Run() == nil {
+				exePath = target
+			} else {
+				// Try building from package parent path
+				binDirParent, errP := filepath.Abs("../bin")
+				if errP == nil {
+					_ = os.MkdirAll(binDirParent, 0755)
+					targetParent := filepath.Join(binDirParent, "mops.exe")
+					buildCmdParent := exec.Command("go", "build", "-o", targetParent, "../cmd/mops")
+					if buildCmdParent.Run() == nil {
+						exePath = targetParent
+					}
+				}
+			}
+		}
+	}
+
+	if exePath == "" {
+		t.Skip("mops.exe not built yet in bin/ directory, skipping binary blackbox test")
 		return
 	}
 
