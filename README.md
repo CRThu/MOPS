@@ -7,6 +7,7 @@
 ## 功能特性
 
 - **静态链接 GOST 内核** — 内存级代理，零外部 `gost.exe` 子进程，零 IPC 开销
+- **跨节点文件传输 REST API** — 自动进行 1MB 单次高效缓冲、Trailer Hash 校验及同名重命名保护
 - **零配置 mDNS 组网** — 基于原生 Go zeroconf，自动广播并动态更新 Round-Robin 节点轮询链
 - **Windows 原生系统服务** — 支持无黑框静默运行 (`Services.msc`)，开机常驻守护
 - **Windows 注册表系统代理** — 一键开启/关闭/查看 Windows 系统全局代理
@@ -50,6 +51,8 @@ go build -o mops.exe ./cmd/mops
 |------|------|--------|
 | `--server-port` | Server TCP 监听端口 | `10080` |
 | `--client-port` | Client SOCKS5 代理端口 | `10081` |
+| `--api-port` | RESTful API 端口 | `10082` |
+| `--download-dir` | 文件接收保存目录 | `./downloads` |
 | `--listen` | 本地绑定地址 | `127.0.0.1` |
 | `--advertise` | mDNS 广播 IP | 自动检测 |
 | `--strategy` | 负载均衡策略 (`random` / `hash`) | `random` |
@@ -61,6 +64,7 @@ go build -o mops.exe ./cmd/mops
 |------|------|----------|
 | Server TCP | `--server-port` | 10080 |
 | Client SOCKS5 | `--client-port` | 10081 |
+| RESTful API | `--api-port` | 10082 |
 
 ---
 

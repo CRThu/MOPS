@@ -3,11 +3,16 @@ package mops
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,9 +21,18 @@ import (
 // Header defines the tunnel handshake protocol header.
 type Header struct {
 	Version    int    `json:"version"`
-	Host       string `json:"host"`
+	Proto      string `json:"proto,omitempty"` // "proxy" or "file"
+	Host       string `json:"host,omitempty"`
+	FileName   string `json:"file_name,omitempty"`
+	FileSize   int64  `json:"file_size,omitempty"`
+	FileHash   string `json:"file_hash,omitempty"`
 	ClientPort int    `json:"client_port,omitempty"`
 	ClientHost string `json:"client_host,omitempty"`
+}
+
+// Trailer defines the end-of-stream verification payload.
+type Trailer struct {
+	FileHash string `json:"file_hash,omitempty"`
 }
 
 // Node represents a cluster proxy server node.
@@ -38,13 +52,14 @@ type Node struct {
 
 // Config defines the configuration for MOPS Engine.
 type Config struct {
-	ServerPort int
-	ClientPort int
-	APIPort    int
-	ListenAddr string
-	Hostname   string
-	Advertise  string
-	Strategy   string // "random" or "hash"
+	ServerPort  int
+	ClientPort  int
+	APIPort     int
+	ListenAddr  string
+	Hostname    string
+	Advertise   string
+	Strategy    string // "random" or "hash"
+	DownloadDir string
 }
 
 // Engine coordinates the proxy server, client, and node pool.
@@ -295,12 +310,6 @@ func (e *Engine) handleServerConn(conn net.Conn) {
 		return
 	}
 
-	targetConn, err := net.DialTimeout("tcp", hdr.Host, 10*time.Second)
-	if err != nil {
-		return
-	}
-	defer targetConn.Close()
-
 	selfID := fmt.Sprintf("%s@%s:%d", e.cfg.Hostname, e.cfg.Advertise, e.cfg.ServerPort)
 	e.mu.Lock()
 	var meNode *Node
@@ -312,7 +321,159 @@ func (e *Engine) handleServerConn(conn net.Conn) {
 	e.mu.Unlock()
 
 	multiReader := io.MultiReader(reader, conn)
+
+	if hdr.Proto == "file" {
+		e.handleIncomingFile(multiReader, hdr, meNode)
+		return
+	}
+
+	targetConn, err := net.DialTimeout("tcp", hdr.Host, 10*time.Second)
+	if err != nil {
+		return
+	}
+	defer targetConn.Close()
+
 	e.relayServerWithStats(conn, multiReader, targetConn, meNode)
+}
+
+func (e *Engine) handleIncomingFile(reader io.Reader, hdr Header, meNode *Node) {
+	saveDir := e.cfg.DownloadDir
+	if saveDir == "" {
+		saveDir = "./downloads"
+	}
+
+	filePath := getUniqueFilePath(saveDir, hdr.FileName)
+	outFile, err := os.Create(filePath)
+	if err != nil {
+		return
+	}
+
+	limitReader := io.LimitReader(reader, hdr.FileSize)
+	hasher := sha256.New()
+	buf := make([]byte, 1024*1024) // 1MB Buffer
+
+	for {
+		n, err := limitReader.Read(buf)
+		if n > 0 {
+			atomic.AddUint64(&e.bytesDown, uint64(n))
+			if meNode != nil {
+				atomic.AddUint64(&meNode.BytesDown, uint64(n))
+			}
+			_, _ = outFile.Write(buf[:n])
+			_, _ = hasher.Write(buf[:n])
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	_ = outFile.Sync()
+	_ = outFile.Close()
+
+	// Read Trailer JSON line from remaining stream
+	bufReader := bufio.NewReader(reader)
+	trailerLine, err := bufReader.ReadBytes('\n')
+	if err == nil && len(trailerLine) > 0 {
+		var tr Trailer
+		if err := json.Unmarshal(trailerLine, &tr); err == nil && tr.FileHash != "" {
+			calcHash := fmt.Sprintf("sha256:%s", hex.EncodeToString(hasher.Sum(nil)))
+			if calcHash != tr.FileHash {
+				_ = os.Remove(filePath)
+				return
+			}
+		}
+	}
+}
+
+func getUniqueFilePath(dir, fileName string) string {
+	if dir == "" {
+		dir = "./downloads"
+	}
+	_ = os.MkdirAll(dir, 0755)
+
+	baseName := filepath.Base(fileName)
+	if baseName == "." || baseName == "/" {
+		baseName = "file.bin"
+	}
+	ext := filepath.Ext(baseName)
+	nameWithoutExt := strings.TrimSuffix(baseName, ext)
+
+	target := filepath.Join(dir, baseName)
+	if _, err := os.Stat(target); os.IsNotExist(err) {
+		return target
+	}
+
+	for i := 1; ; i++ {
+		newName := fmt.Sprintf("%s(%d)%s", nameWithoutExt, i, ext)
+		target = filepath.Join(dir, newName)
+		if _, err := os.Stat(target); os.IsNotExist(err) {
+			return target
+		}
+	}
+}
+
+// SendFileToNode connects to a target node and streams file data using "file" protocol.
+func (e *Engine) SendFileToNode(targetIP string, targetPort int, fileName string, reader io.Reader, fileSize int64, fileHash string) (string, error) {
+	addr := fmt.Sprintf("%s:%d", targetIP, targetPort)
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return "", fmt.Errorf("failed to connect to node %s: %w", addr, err)
+	}
+	defer conn.Close()
+
+	hdr := Header{
+		Version:    1,
+		Proto:      "file",
+		FileName:   fileName,
+		FileSize:   fileSize,
+		ClientHost: e.cfg.Advertise,
+		ClientPort: e.cfg.ClientPort,
+	}
+
+	data, err := json.Marshal(hdr)
+	if err != nil {
+		return "", err
+	}
+	data = append(data, '\n')
+	if _, err := conn.Write(data); err != nil {
+		return "", err
+	}
+
+	hasher := sha256.New()
+	buf := make([]byte, 1024*1024) // 1MB Buffer
+
+	for {
+		n, rerr := reader.Read(buf)
+		if n > 0 {
+			atomic.AddUint64(&e.bytesUp, uint64(n))
+			_, _ = hasher.Write(buf[:n])
+			if _, werr := conn.Write(buf[:n]); werr != nil {
+				return "", werr
+			}
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				break
+			}
+			return "", rerr
+		}
+	}
+
+	// Send Trailer JSON
+	if fileHash == "" {
+		fileHash = fmt.Sprintf("sha256:%s", hex.EncodeToString(hasher.Sum(nil)))
+	}
+
+	tr := Trailer{
+		FileHash: fileHash,
+	}
+	trData, err := json.Marshal(tr)
+	if err != nil {
+		return "", err
+	}
+	trData = append(trData, '\n')
+	_, err = conn.Write(trData)
+	return fileHash, err
 }
 
 func (e *Engine) relayServerWithStats(conn net.Conn, connReader io.Reader, targetConn net.Conn, meNode *Node) {

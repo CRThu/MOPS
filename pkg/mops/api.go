@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"os"
+	"strconv"
 	"sync/atomic"
 	"time"
 )
@@ -63,11 +66,10 @@ func (a *APIServer) Start(port int, listenAddr string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/nodes", a.handleGetNodes)
 	mux.HandleFunc("/api/v1/status", a.handleGetStatus)
+	mux.HandleFunc("/api/v1/files/transfer", a.handleFileTransfer)
 
 	a.server = &http.Server{
-		Handler:      mux,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		Handler: mux,
 	}
 
 	go func() {
@@ -141,6 +143,92 @@ func (a *APIServer) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		Code:    http.StatusOK,
 		Message: "success",
 		Data:    status,
+	})
+}
+
+func (a *APIServer) handleFileTransfer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{
+			Code:    http.StatusMethodNotAllowed,
+			Message: "Method Not Allowed",
+		})
+		return
+	}
+
+	targetIP := r.URL.Query().Get("target_ip")
+	if targetIP == "" {
+		writeJSON(w, http.StatusBadRequest, APIResponse{
+			Code:    http.StatusBadRequest,
+			Message: "target_ip parameter is required",
+		})
+		return
+	}
+
+	targetPortStr := r.URL.Query().Get("target_port")
+	targetPort := 10080
+	if targetPortStr != "" {
+		if p, err := strconv.Atoi(targetPortStr); err == nil && p > 0 {
+			targetPort = p
+		}
+	}
+
+	filePath := r.URL.Query().Get("path")
+	var reader io.Reader
+	var fileName string
+	var fileSize int64
+	var fileHash string
+
+	if filePath != "" {
+		file, err := os.Open(filePath)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, APIResponse{
+				Code:    http.StatusBadRequest,
+				Message: fmt.Sprintf("failed to open file %s: %v", filePath, err),
+			})
+			return
+		}
+		defer file.Close()
+
+		stat, err := file.Stat()
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, APIResponse{
+				Code:    http.StatusBadRequest,
+				Message: fmt.Sprintf("failed to stat file %s: %v", filePath, err),
+			})
+			return
+		}
+
+		fileName = stat.Name()
+		fileSize = stat.Size()
+		reader = file
+	} else {
+		fileName = r.URL.Query().Get("file_name")
+		if fileName == "" {
+			fileName = "transferred_file.bin"
+		}
+		fileSize = r.ContentLength
+		reader = r.Body
+	}
+
+	computedHash, err := a.engine.SendFileToNode(targetIP, targetPort, fileName, reader, fileSize, fileHash)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, APIResponse{
+			Code:    http.StatusInternalServerError,
+			Message: fmt.Sprintf("Failed to transfer file to %s:%d: %v", targetIP, targetPort, err),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, APIResponse{
+		Code:    http.StatusOK,
+		Message: "file transfer completed successfully",
+		Data: map[string]interface{}{
+			"target_ip":   targetIP,
+			"target_port": targetPort,
+			"file_name":   fileName,
+			"file_size":   fileSize,
+			"file_hash":   computedHash,
+		},
 	})
 }
 

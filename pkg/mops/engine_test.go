@@ -1,10 +1,15 @@
 package mops
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -369,6 +374,156 @@ func TestEngineAllNodesOffline(t *testing.T) {
 
 	// Expect 0x04 (Host unreachable)
 	assert.Equal(t, byte(0x04), socksResp[1])
+}
+
+func TestFileTransferProtocol(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "mops_test_download_*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	serverPort := getFreePort()
+	cfg := Config{
+		ServerPort:  serverPort,
+		ClientPort:  0,
+		ListenAddr:  "127.0.0.1",
+		Hostname:    "FileReceiver",
+		DownloadDir: tempDir,
+	}
+
+	engine := NewEngine(cfg)
+	ctx := context.Background()
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	fileContent := []byte("Hello MOPS File Transfer Test!")
+	hasher := sha256.New()
+	hasher.Write(fileContent)
+	fileHash := fmt.Sprintf("sha256:%s", hex.EncodeToString(hasher.Sum(nil)))
+
+	// Send file to receiver node
+	_, err = engine.SendFileToNode("127.0.0.1", serverPort, "test_doc.txt", bytes.NewReader(fileContent), int64(len(fileContent)), fileHash)
+	require.NoError(t, err)
+
+	// Verify file received in tempDir
+	targetPath := filepath.Join(tempDir, "test_doc.txt")
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(targetPath)
+		return err == nil
+	}, 2*time.Second, 20*time.Millisecond)
+
+	data, err := os.ReadFile(targetPath)
+	require.NoError(t, err)
+	assert.Equal(t, fileContent, data)
+}
+
+func TestFileTransferAutoRename(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "mops_test_rename_*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	serverPort := getFreePort()
+	cfg := Config{
+		ServerPort:  serverPort,
+		ClientPort:  0,
+		ListenAddr:  "127.0.0.1",
+		Hostname:    "RenameReceiver",
+		DownloadDir: tempDir,
+	}
+
+	engine := NewEngine(cfg)
+	ctx := context.Background()
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	fileContent := []byte("Content Version 1")
+	_, err = engine.SendFileToNode("127.0.0.1", serverPort, "sample.txt", bytes.NewReader(fileContent), int64(len(fileContent)), "")
+	require.NoError(t, err)
+
+	// Send second file with same name
+	fileContent2 := []byte("Content Version 2")
+	_, err = engine.SendFileToNode("127.0.0.1", serverPort, "sample.txt", bytes.NewReader(fileContent2), int64(len(fileContent2)), "")
+	require.NoError(t, err)
+
+	path1 := filepath.Join(tempDir, "sample.txt")
+	path2 := filepath.Join(tempDir, "sample(1).txt")
+
+	require.Eventually(t, func() bool {
+		_, err1 := os.Stat(path1)
+		_, err2 := os.Stat(path2)
+		return err1 == nil && err2 == nil
+	}, 2*time.Second, 20*time.Millisecond)
+
+	data1, _ := os.ReadFile(path1)
+	data2, _ := os.ReadFile(path2)
+
+	assert.Equal(t, fileContent, data1)
+	assert.Equal(t, fileContent2, data2)
+}
+
+func TestFileTransferZeroBytes(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "mops_test_zero_*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	serverPort := getFreePort()
+	cfg := Config{
+		ServerPort:  serverPort,
+		ClientPort:  0,
+		ListenAddr:  "127.0.0.1",
+		Hostname:    "ZeroBytesReceiver",
+		DownloadDir: tempDir,
+	}
+
+	engine := NewEngine(cfg)
+	ctx := context.Background()
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	// Send 0 bytes file
+	_, err = engine.SendFileToNode("127.0.0.1", serverPort, "empty.txt", bytes.NewReader([]byte{}), 0, "")
+	require.NoError(t, err)
+
+	targetPath := filepath.Join(tempDir, "empty.txt")
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(targetPath)
+		return err == nil
+	}, 2*time.Second, 20*time.Millisecond)
+
+	stat, err := os.Stat(targetPath)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), stat.Size())
+}
+
+func TestFileTransferTrailerHashCorrupted(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "mops_test_corrupt_*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	serverPort := getFreePort()
+	cfg := Config{
+		ServerPort:  serverPort,
+		ClientPort:  0,
+		ListenAddr:  "127.0.0.1",
+		Hostname:    "CorruptReceiver",
+		DownloadDir: tempDir,
+	}
+
+	engine := NewEngine(cfg)
+	ctx := context.Background()
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	// Send file with intentionally mismatched/corrupted Hash
+	fileContent := []byte("Valid content but hash will mismatch")
+	wrongHash := "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+	_, err = engine.SendFileToNode("127.0.0.1", serverPort, "corrupted.txt", bytes.NewReader(fileContent), int64(len(fileContent)), wrongHash)
+	require.NoError(t, err)
+
+	// Verify file was removed due to corrupt Hash mismatch
+	time.Sleep(100 * time.Millisecond)
+	targetPath := filepath.Join(tempDir, "corrupted.txt")
+	assert.NoFileExists(t, targetPath)
 }
 
 func TestEngineTrafficAndSpeedStats(t *testing.T) {

@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestGETNodesAPI(t *testing.T) {
@@ -168,4 +172,110 @@ func TestAPIServerLifecycle(t *testing.T) {
 	if err == nil {
 		t.Errorf("expected error after engine stop, but API still responded")
 	}
+}
+
+func TestAPIFileTransfer(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "mops_api_file_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	serverPort := 10840
+	apiPort := 10841
+
+	cfg := Config{
+		ServerPort:  serverPort,
+		ClientPort:  0,
+		APIPort:     apiPort,
+		Hostname:    "APITransferTarget",
+		DownloadDir: tempDir,
+	}
+
+	engine := NewEngine(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("engine start failed: %v", err)
+	}
+	defer engine.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// 1. Create a dummy local file for ?path= test
+	srcFile, err := os.CreateTemp("", "mops_src_file_*.txt")
+	require.NoError(t, err)
+	defer os.Remove(srcFile.Name())
+	srcContent := []byte("Auto path calculation test content")
+	_, err = srcFile.Write(srcContent)
+	require.NoError(t, err)
+	srcFile.Close()
+
+	// 2. Call POST /api/v1/files/transfer with ?path= parameter
+	pathUrl := fmt.Sprintf("http://127.0.0.1:%d/api/v1/files/transfer?target_ip=127.0.0.1&target_port=%d&path=%s", apiPort, serverPort, srcFile.Name())
+	reqPath, err := http.NewRequest(http.MethodPost, pathUrl, nil)
+	require.NoError(t, err)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(reqPath)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var apiResp APIResponse
+	err = json.NewDecoder(resp.Body).Decode(&apiResp)
+	require.NoError(t, err)
+	require.Equal(t, 200, apiResp.Code)
+
+	// Verify file saved in download dir with automatically extracted name
+	expectedName := filepath.Base(srcFile.Name())
+	targetPath := filepath.Join(tempDir, expectedName)
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(targetPath)
+		return err == nil
+	}, 2*time.Second, 20*time.Millisecond)
+
+	readData, err := os.ReadFile(targetPath)
+	require.NoError(t, err)
+	require.Equal(t, srcContent, readData)
+}
+
+func TestAPIFileTransferNotFound(t *testing.T) {
+	apiPort := 10842
+	serverPort := 10843
+
+	cfg := Config{
+		ServerPort: serverPort,
+		ClientPort: 0,
+		APIPort:    apiPort,
+		Hostname:   "NotFoundTest",
+	}
+
+	engine := NewEngine(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Call POST with non-existent file path
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/v1/files/transfer?target_ip=127.0.0.1&target_port=%d&path=D:/non_existent_file_xyz.txt", apiPort, serverPort)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	require.NoError(t, err)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	var apiResp APIResponse
+	err = json.NewDecoder(resp.Body).Decode(&apiResp)
+	require.NoError(t, err)
+	require.Equal(t, 400, apiResp.Code)
 }

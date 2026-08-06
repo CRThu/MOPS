@@ -60,14 +60,15 @@ func fetchStatusFromAPI(apiPort int) (*StatusData, []*Node, error) {
 // Execute builds and executes the CLI commands.
 func Execute() error {
 	var (
-		serverPort int
-		clientPort int
-		apiPort    int
-		listenAddr string
-		advertise  string
-		strategy   string
-		nodes      []string
-		watch      bool
+		serverPort  int
+		clientPort  int
+		apiPort     int
+		listenAddr  string
+		advertise   string
+		strategy    string
+		downloadDir string
+		nodes       []string
+		watch       bool
 	)
 
 	defaultHostname, _ := os.Hostname()
@@ -81,13 +82,14 @@ func Execute() error {
 		Short: "MOPS Multi-node Outbound Proxy System",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDaemon(Config{
-				ServerPort: serverPort,
-				ClientPort: clientPort,
-				APIPort:    apiPort,
-				ListenAddr: listenAddr,
-				Hostname:   hostname,
-				Advertise:  advertise,
-				Strategy:   strategy,
+				ServerPort:  serverPort,
+				ClientPort:  clientPort,
+				APIPort:     apiPort,
+				ListenAddr:  listenAddr,
+				Hostname:    hostname,
+				Advertise:   advertise,
+				Strategy:    strategy,
+				DownloadDir: downloadDir,
 			}, nodes)
 		},
 	}
@@ -99,6 +101,7 @@ func Execute() error {
 	rootCmd.PersistentFlags().StringVar(&listenAddr, "listen", "127.0.0.1", "Client Listen IP")
 	rootCmd.PersistentFlags().StringVar(&advertise, "advertise", "", "mDNS Advertise IP")
 	rootCmd.PersistentFlags().StringVar(&strategy, "strategy", "random", "Load balance strategy")
+	rootCmd.PersistentFlags().StringVar(&downloadDir, "download-dir", "./downloads", "File transfer save directory")
 	rootCmd.PersistentFlags().StringSliceVar(&nodes, "node", nil, "Explicit remote node IP:Port (e.g. 192.168.132.72:10080)")
 
 	// run command
@@ -107,13 +110,14 @@ func Execute() error {
 		Short: "Run MOPS proxy daemon in foreground",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDaemon(Config{
-				ServerPort: serverPort,
-				ClientPort: clientPort,
-				APIPort:    apiPort,
-				ListenAddr: listenAddr,
-				Hostname:   hostname,
-				Advertise:  advertise,
-				Strategy:   strategy,
+				ServerPort:  serverPort,
+				ClientPort:  clientPort,
+				APIPort:     apiPort,
+				ListenAddr:  listenAddr,
+				Hostname:    hostname,
+				Advertise:   advertise,
+				Strategy:    strategy,
+				DownloadDir: downloadDir,
 			}, nodes)
 		},
 	}

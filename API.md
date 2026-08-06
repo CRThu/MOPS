@@ -104,3 +104,39 @@ RESTful API 返回的标准 JSON 结构体如下：
 | `bytes_down` | uint64 | 累计下载总字节数 (Byte) |
 | `total_nodes` | int | 当前感知到的全量节点数 |
 | `online_nodes` | int | 当前在线（Status = ONLINE）节点数 |
+
+---
+
+## 3. 跨节点文件传输
+
+将本地指定路径的文件通过 MOPS 分布式 TCP 通道安全流式传输至目标节点，自动校验 SHA256 完整性及防覆盖重命名。
+
+- **请求方法**: `POST`
+- **请求路径**: `/api/v1/files/transfer`
+- **URL Query 参数**:
+  - `target_ip` (string, 必填): 目标节点的 IP 地址
+  - `target_port` (int, 选填): 目标节点的 Server 端口，默认 `10080`
+  - `path` (string, 选填): 本地要发送的文件绝对/相对路径。系统自动解析文件名、字节大小与计算 SHA256。
+
+### 请求示例
+
+```bash
+curl -X POST "http://127.0.0.1:10082/api/v1/files/transfer?target_ip=192.168.132.74&path=D:/movies/demo.mp4"
+```
+
+### 响应示例
+
+```json
+{
+  "code": 200,
+  "message": "file transfer completed successfully",
+  "data": {
+    "target_ip": "192.168.132.74",
+    "target_port": 10080,
+    "file_name": "demo.mp4",
+    "file_size": 104857600,
+    "file_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}
+```
+

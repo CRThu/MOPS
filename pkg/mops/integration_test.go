@@ -2,9 +2,15 @@ package mops
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -296,5 +302,93 @@ func TestEndToEndLargeDataStream(t *testing.T) {
 	up, down := engC.GetSpeed()
 	assert.GreaterOrEqual(t, up, float64(0))
 	assert.GreaterOrEqual(t, down, float64(0))
+}
+
+func TestEndToEndMultiNodeFileTransfer(t *testing.T) {
+	// 1. Create temporary download dir for Server Node B
+	tempDir, err := os.MkdirTemp("", "mops_e2e_download_*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	// 2. Start Receiver Server Node B
+	sPortB := getFreePort()
+	cfgB := Config{
+		ServerPort:  sPortB,
+		ClientPort:  0,
+		ListenAddr:  "127.0.0.1",
+		Hostname:    "Server-NodeB",
+		DownloadDir: tempDir,
+	}
+	engB := NewEngine(cfgB)
+	ctx := context.Background()
+	require.NoError(t, engB.Start(ctx))
+	defer engB.Stop()
+
+	// 3. Start Sender Controller Node A with REST API
+	apiPortA := getFreePort()
+	cfgA := Config{
+		ServerPort: 0,
+		ClientPort: 0,
+		APIPort:    apiPortA,
+		ListenAddr: "127.0.0.1",
+		Hostname:   "Controller-NodeA",
+	}
+	engA := NewEngine(cfgA)
+	require.NoError(t, engA.Start(ctx))
+	defer engA.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// 4. Create Source File on Node A machine (2MB payload)
+	srcFile, err := os.CreateTemp("", "mops_e2e_source_*.bin")
+	require.NoError(t, err)
+	defer os.Remove(srcFile.Name())
+
+	payloadSize := 2 * 1024 * 1024
+	sendBytes := make([]byte, payloadSize)
+	for i := range sendBytes {
+		sendBytes[i] = byte((i * 17) % 256)
+	}
+	_, err = srcFile.Write(sendBytes)
+	require.NoError(t, err)
+	srcFile.Close()
+
+	hasher := sha256.New()
+	hasher.Write(sendBytes)
+	expectedHash := fmt.Sprintf("sha256:%s", hex.EncodeToString(hasher.Sum(nil)))
+
+	// 5. Call Node A REST API to transfer to Node B
+	transferUrl := fmt.Sprintf("http://127.0.0.1:%d/api/v1/files/transfer?target_ip=127.0.0.1&target_port=%d&path=%s", apiPortA, sPortB, srcFile.Name())
+	req, err := http.NewRequest(http.MethodPost, transferUrl, nil)
+	require.NoError(t, err)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var apiResp APIResponse
+	err = json.NewDecoder(resp.Body).Decode(&apiResp)
+	require.NoError(t, err)
+	require.Equal(t, 200, apiResp.Code)
+
+	// 6. Verify Node B DownloadDir received the file accurately with Trailer Hash
+	expectedFileName := filepath.Base(srcFile.Name())
+	destFilePath := filepath.Join(tempDir, expectedFileName)
+
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(destFilePath)
+		return err == nil
+	}, 3*time.Second, 50*time.Millisecond)
+
+	recvBytes, err := os.ReadFile(destFilePath)
+	require.NoError(t, err)
+	require.Equal(t, sendBytes, recvBytes)
+
+	dataMap, ok := apiResp.Data.(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, expectedHash, dataMap["file_hash"])
 }
 
