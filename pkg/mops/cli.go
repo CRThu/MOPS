@@ -2,8 +2,10 @@ package mops
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -12,6 +14,48 @@ import (
 
 	"github.com/spf13/cobra"
 )
+
+func fetchStatusFromAPI(apiPort int) (*StatusData, []*Node, error) {
+	client := &http.Client{Timeout: 1 * time.Second}
+
+	statusResp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/status", apiPort))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer statusResp.Body.Close()
+	if statusResp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("unexpected status code: %d", statusResp.StatusCode)
+	}
+
+	var statusWrapper struct {
+		Code    int        `json:"code"`
+		Message string     `json:"message"`
+		Data    StatusData `json:"data"`
+	}
+	if err := json.NewDecoder(statusResp.Body).Decode(&statusWrapper); err != nil {
+		return nil, nil, err
+	}
+
+	nodesResp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/nodes", apiPort))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer nodesResp.Body.Close()
+	if nodesResp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("unexpected status code: %d", nodesResp.StatusCode)
+	}
+
+	var nodesWrapper struct {
+		Code    int     `json:"code"`
+		Message string  `json:"message"`
+		Data    []*Node `json:"data"`
+	}
+	if err := json.NewDecoder(nodesResp.Body).Decode(&nodesWrapper); err != nil {
+		return nil, nil, err
+	}
+
+	return &statusWrapper.Data, nodesWrapper.Data, nil
+}
 
 // Execute builds and executes the CLI commands.
 func Execute() error {
@@ -80,6 +124,27 @@ func Execute() error {
 		Use:   "status",
 		Short: "Show cluster status in terminal",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// 1. Try to fetch status from running daemon via REST API first
+			statusData, nodes, err := fetchStatusFromAPI(apiPort)
+			if err == nil {
+				if !watch {
+					fmt.Print(RenderStatus(nodes, statusData.Strategy, statusData.ClientPort, statusData.SpeedUp, statusData.SpeedDown))
+					return nil
+				}
+
+				for {
+					statusData, nodes, err := fetchStatusFromAPI(apiPort)
+					if err != nil {
+						fmt.Printf("\n[WARNING] Lost connection to daemon API: %v\n", err)
+						return nil
+					}
+					fmt.Print("\033[H\033[2J") // Clear terminal screen
+					fmt.Print(RenderStatus(nodes, statusData.Strategy, statusData.ClientPort, statusData.SpeedUp, statusData.SpeedDown))
+					time.Sleep(1 * time.Second)
+				}
+			}
+
+			// 2. Fallback to standalone scanner if API is unreachable
 			cfg := Config{
 				ServerPort: serverPort,
 				ClientPort: clientPort,

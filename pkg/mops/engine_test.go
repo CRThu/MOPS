@@ -371,3 +371,94 @@ func TestEngineAllNodesOffline(t *testing.T) {
 	assert.Equal(t, byte(0x04), socksResp[1])
 }
 
+func TestEngineTrafficAndSpeedStats(t *testing.T) {
+	targetListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer targetListener.Close()
+
+	targetPort := targetListener.Addr().(*net.TCPAddr).Port
+
+	go func() {
+		conn, err := targetListener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := conn.Read(buf)
+			if n > 0 {
+				conn.Write(buf[:n])
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
+
+	serverPort := getFreePort()
+	clientPort := getFreePort()
+	apiPort := getFreePort()
+	cfg := Config{
+		ServerPort: serverPort,
+		ClientPort: clientPort,
+		APIPort:    apiPort,
+		ListenAddr: "127.0.0.1",
+		Hostname:   "StatsNode",
+		Advertise:  "127.0.0.1",
+	}
+	engine := NewEngine(cfg)
+	ctx := context.Background()
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	// Dial SOCKS5 proxy
+	proxyConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", clientPort))
+	require.NoError(t, err)
+	defer proxyConn.Close()
+
+	proxyConn.Write([]byte{0x05, 0x01, 0x00})
+	resp := make([]byte, 2)
+	_, err = io.ReadFull(proxyConn, resp)
+	require.NoError(t, err)
+
+	req := []byte{0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, byte(targetPort >> 8), byte(targetPort & 0xff)}
+	proxyConn.Write(req)
+	socksResp := make([]byte, 10)
+	_, err = io.ReadFull(proxyConn, socksResp)
+	require.NoError(t, err)
+	assert.Equal(t, byte(0x00), socksResp[1])
+
+	// Send large payload to trigger traffic stats
+	payload := make([]byte, 64*1024)
+	for i := range payload {
+		payload[i] = byte(i % 256)
+	}
+	_, err = proxyConn.Write(payload)
+	require.NoError(t, err)
+
+	recvBuf := make([]byte, len(payload))
+	_, err = io.ReadFull(proxyConn, recvBuf)
+	require.NoError(t, err)
+	assert.Equal(t, payload, recvBuf)
+
+	// Wait for speed calculation loop (1s ticker)
+	time.Sleep(1100 * time.Millisecond)
+
+	speedUp, speedDown := engine.GetSpeed()
+	assert.Greater(t, atomic.LoadUint64(&engine.bytesUp), uint64(0))
+	assert.Greater(t, atomic.LoadUint64(&engine.bytesDown), uint64(0))
+	assert.True(t, speedUp > 0 || speedDown > 0, "Expected non-zero speed calculation")
+
+	// Verify via REST API as well
+	statusData, nodes, err := fetchStatusFromAPI(apiPort)
+	require.NoError(t, err)
+	assert.Greater(t, statusData.BytesUp, uint64(0))
+	assert.Greater(t, statusData.BytesDown, uint64(0))
+	assert.Len(t, nodes, 1)
+	assert.Greater(t, nodes[0].BytesUp, uint64(0))
+	assert.Greater(t, nodes[0].BytesDown, uint64(0))
+}
+
+

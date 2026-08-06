@@ -17,8 +17,8 @@ App → Client SOCKS5(:10081) → mDNS 局域网自动发现 → Server(:10080) 
 | `cmd/mops/main.go` | 程序唯一 CLI 入口 |
 | `pkg/mops/api.go` | RESTful HTTP API 服务 (`/api/v1/nodes`, `/api/v1/status`) |
 | `pkg/mops/api_test.go` | [单元测试] RESTful API 路由与响应测试 |
-| `pkg/mops/engine.go` | 内存静态引用 GOST 内核，管理监听与负载均衡 Round-Robin |
-| `pkg/mops/engine_test.go` | [单元测试] 代理服务与节点更新测试 |
+| `pkg/mops/engine.go` | 内存静态引用 GOST 内核，管理监听、负载均衡与 Client/Server 侧全链路流量网速统计 |
+| `pkg/mops/engine_test.go` | [单元测试] 代理服务、流量与实时速率统计、节点更新测试 |
 | `pkg/mops/discovery.go` | mDNS 局域网服务广播与搜寻 (`zeroconf`) |
 | `pkg/mops/discovery_test.go` | [单元测试] mDNS 发现与解析测试 |
 | `pkg/mops/proxy_windows.go` | Windows 注册表系统代理开关 (`golang.org/x/sys/windows/registry`) |
@@ -27,7 +27,7 @@ App → Client SOCKS5(:10081) → mDNS 局域网自动发现 → Server(:10080) 
 | `pkg/mops/service_test.go` | [单元测试] Windows 系统服务包装测试 |
 | `pkg/mops/status.go` | Tailscale 风格 Terminal 控制台表格与速率渲染 |
 | `pkg/mops/status_test.go` | [单元测试] 表格格式化与渲染测试 |
-| `pkg/mops/cli.go` | Cobra CLI 命令树 (`run`, `status`, `proxy`, `service`) |
+| `pkg/mops/cli.go` | Cobra CLI 命令树（`run`, `status` 优先直连守护进程 REST API, `proxy`, `service`） |
 | `pkg/mops/cli_test.go` | [单元测试] CLI 命令行树与交互测试 |
 | `pkg/mops/exe_integration_test.go` | [集成测试] `mops.exe` 二进制黑盒集成测试 |
 | `pkg/mops/integration_test.go` | [集成测试] 端到端多节点代理与负载均衡测试 |

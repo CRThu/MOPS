@@ -303,17 +303,19 @@ func (e *Engine) handleServerConn(conn net.Conn) {
 
 	selfID := fmt.Sprintf("%s@%s:%d", e.cfg.Hostname, e.cfg.Advertise, e.cfg.ServerPort)
 	e.mu.Lock()
+	var meNode *Node
 	if me, ok := e.nodes[selfID]; ok {
+		meNode = me
 		atomic.AddInt64(&me.ActiveConn, 1)
 		defer atomic.AddInt64(&me.ActiveConn, -1)
 	}
 	e.mu.Unlock()
 
 	multiReader := io.MultiReader(reader, conn)
-	e.relayReader(conn, multiReader, targetConn)
+	e.relayServerWithStats(conn, multiReader, targetConn, meNode)
 }
 
-func (e *Engine) relayReader(conn net.Conn, connReader io.Reader, targetConn net.Conn) {
+func (e *Engine) relayServerWithStats(conn net.Conn, connReader io.Reader, targetConn net.Conn, meNode *Node) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	closeBoth := func() {
@@ -321,18 +323,48 @@ func (e *Engine) relayReader(conn net.Conn, connReader io.Reader, targetConn net
 		_ = targetConn.Close()
 	}
 
-	// conn (client tunnel) -> targetConn
+	// conn (client tunnel) -> targetConn (Upload)
 	go func() {
 		defer wg.Done()
 		defer closeBoth()
-		io.Copy(targetConn, connReader)
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := connReader.Read(buf)
+			if n > 0 {
+				atomic.AddUint64(&e.bytesUp, uint64(n))
+				if meNode != nil {
+					atomic.AddUint64(&meNode.BytesUp, uint64(n))
+				}
+				if _, werr := targetConn.Write(buf[:n]); werr != nil {
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
 	}()
 
-	// targetConn -> conn
+	// targetConn -> conn (Download)
 	go func() {
 		defer wg.Done()
 		defer closeBoth()
-		io.Copy(conn, targetConn)
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := targetConn.Read(buf)
+			if n > 0 {
+				atomic.AddUint64(&e.bytesDown, uint64(n))
+				if meNode != nil {
+					atomic.AddUint64(&meNode.BytesDown, uint64(n))
+				}
+				if _, werr := conn.Write(buf[:n]); werr != nil {
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
 	}()
 
 	wg.Wait()
