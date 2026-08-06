@@ -233,8 +233,8 @@ func TestAPIFileTransfer(t *testing.T) {
 	expectedName := filepath.Base(srcFile.Name())
 	targetPath := filepath.Join(tempDir, expectedName)
 	require.Eventually(t, func() bool {
-		_, err := os.Stat(targetPath)
-		return err == nil
+		info, err := os.Stat(targetPath)
+		return err == nil && info.Size() == int64(len(srcContent))
 	}, 2*time.Second, 20*time.Millisecond)
 
 	readData, err := os.ReadFile(targetPath)

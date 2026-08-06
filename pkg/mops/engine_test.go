@@ -407,8 +407,8 @@ func TestFileTransferProtocol(t *testing.T) {
 	// Verify file received in tempDir
 	targetPath := filepath.Join(tempDir, "test_doc.txt")
 	require.Eventually(t, func() bool {
-		_, err := os.Stat(targetPath)
-		return err == nil
+		info, err := os.Stat(targetPath)
+		return err == nil && info.Size() == int64(len(fileContent))
 	}, 2*time.Second, 20*time.Millisecond)
 
 	data, err := os.ReadFile(targetPath)
@@ -448,9 +448,9 @@ func TestFileTransferAutoRename(t *testing.T) {
 	path2 := filepath.Join(tempDir, "sample(1).txt")
 
 	require.Eventually(t, func() bool {
-		_, err1 := os.Stat(path1)
-		_, err2 := os.Stat(path2)
-		return err1 == nil && err2 == nil
+		info1, err1 := os.Stat(path1)
+		info2, err2 := os.Stat(path2)
+		return err1 == nil && info1.Size() == int64(len(fileContent)) && err2 == nil && info2.Size() == int64(len(fileContent2))
 	}, 2*time.Second, 20*time.Millisecond)
 
 	data1, _ := os.ReadFile(path1)
