@@ -379,8 +379,8 @@ func TestEndToEndMultiNodeFileTransfer(t *testing.T) {
 	destFilePath := filepath.Join(tempDir, expectedFileName)
 
 	require.Eventually(t, func() bool {
-		_, err := os.Stat(destFilePath)
-		return err == nil
+		fi, err := os.Stat(destFilePath)
+		return err == nil && fi.Size() == int64(len(sendBytes))
 	}, 3*time.Second, 50*time.Millisecond)
 
 	recvBytes, err := os.ReadFile(destFilePath)

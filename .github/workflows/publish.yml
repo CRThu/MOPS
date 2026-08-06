@@ -27,7 +27,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: mops.exe
+          files: bin/mops.exe
           generate_release_notes: true
           draft: false
           prerelease: false
