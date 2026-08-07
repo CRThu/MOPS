@@ -106,19 +106,7 @@ func ControlService(action string, cfg Config) error {
 		targetDir := filepath.Join(pf, "MOPS")
 		targetExe := filepath.Join(targetDir, "mops.exe")
 
-		exePath, err := os.Executable()
-		if err == nil && exePath != "" {
-			cleanCur, _ := filepath.Abs(exePath)
-			cleanDst, _ := filepath.Abs(targetExe)
-			if !strings.EqualFold(cleanCur, cleanDst) {
-				if err := os.MkdirAll(targetDir, 0755); err == nil {
-					_ = copyFileWithOverwrite(cleanCur, cleanDst)
-					svcConfig.Executable = cleanDst
-				}
-			} else {
-				svcConfig.Executable = cleanDst
-			}
-		}
+		svcConfig.Executable = resolveServiceExecutable(targetExe)
 
 		s, err := service.New(prg, svcConfig)
 		if err != nil {
@@ -142,19 +130,7 @@ func ControlService(action string, cfg Config) error {
 			}
 		}
 
-		exePath, err := os.Executable()
-		if err == nil && exePath != "" {
-			cleanCur, _ := filepath.Abs(exePath)
-			cleanDst, _ := filepath.Abs(targetExe)
-			if !strings.EqualFold(cleanCur, cleanDst) {
-				if err := os.MkdirAll(targetDir, 0755); err == nil {
-					_ = copyFileWithOverwrite(cleanCur, cleanDst)
-					svcConfig.Executable = cleanDst
-				}
-			} else {
-				svcConfig.Executable = cleanDst
-			}
-		}
+		svcConfig.Executable = resolveServiceExecutable(targetExe)
 
 		s, err := service.New(prg, svcConfig)
 		if err != nil {
@@ -214,4 +190,31 @@ func copyFileWithOverwrite(src, dst string) error {
 
 	_, err = io.Copy(out, in)
 	return err
+}
+
+func resolveServiceExecutable(targetExe string) string {
+	var srcExe string
+	if cwd, err := os.Getwd(); err == nil {
+		localBin := filepath.Join(cwd, "bin", "mops.exe")
+		if _, err := os.Stat(localBin); err == nil {
+			srcExe = localBin
+		}
+	}
+	if srcExe == "" {
+		if exePath, err := os.Executable(); err == nil && exePath != "" {
+			srcExe = exePath
+		}
+	}
+
+	cleanDst, _ := filepath.Abs(targetExe)
+	if srcExe != "" {
+		cleanCur, _ := filepath.Abs(srcExe)
+		if !strings.EqualFold(cleanCur, cleanDst) {
+			dir := filepath.Dir(cleanDst)
+			if err := os.MkdirAll(dir, 0755); err == nil {
+				_ = copyFileWithOverwrite(cleanCur, cleanDst)
+			}
+		}
+	}
+	return cleanDst
 }

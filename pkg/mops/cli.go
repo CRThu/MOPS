@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kardianos/service"
 	"github.com/spf13/cobra"
 )
 
@@ -250,7 +251,7 @@ func Execute() error {
 		Use:   "mops",
 		Short: "MOPS Multi-node Outbound Proxy System",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDaemon(Config{
+			cfg := Config{
 				ServerPort:  serverPort,
 				ClientPort:  clientPort,
 				APIPort:     apiPort,
@@ -259,7 +260,11 @@ func Execute() error {
 				Advertise:   advertise,
 				Strategy:    strategy,
 				DownloadDir: downloadDir,
-			}, nodes)
+			}
+			if !service.Interactive() {
+				return ControlService("run", cfg)
+			}
+			return runDaemon(cfg, nodes)
 		},
 	}
 
