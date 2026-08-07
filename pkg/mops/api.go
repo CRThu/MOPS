@@ -38,6 +38,7 @@ type StatusData struct {
 	BytesDown     uint64          `json:"bytes_down"`
 	TotalNodes    int             `json:"total_nodes"`
 	OnlineNodes   int             `json:"online_nodes"`
+	DownloadDir   string          `json:"download_dir"`
 }
 
 // APIServer manages the RESTful HTTP API server.
@@ -71,9 +72,12 @@ func (a *APIServer) Start(port int, listenAddr string) error {
 	mux.HandleFunc("/api/v1/nodes", a.handleGetNodes)
 	mux.HandleFunc("/api/v1/status", a.handleGetStatus)
 	mux.HandleFunc("/api/v1/files/transfer", a.handleFileTransfer)
+	mux.HandleFunc("/api/v1/files/progress", a.handleFileProgress)
 	mux.HandleFunc("/api/v1/system-proxy", a.handleSystemProxy)
 	mux.HandleFunc("/api/v1/client", a.handleClientControl)
 	mux.HandleFunc("/api/v1/server", a.handleServerControl)
+	mux.HandleFunc("/api/v1/config", a.handleConfig)
+	mux.HandleFunc("/api/v1/service", a.handleServiceControl)
 
 	a.server = &http.Server{
 		Handler: mux,
@@ -149,6 +153,7 @@ func (a *APIServer) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		BytesDown:     atomic.LoadUint64(&a.engine.bytesDown),
 		TotalNodes:    len(nodes),
 		OnlineNodes:   onlineCount,
+		DownloadDir:   a.engine.GetDownloadDir(),
 	}
 
 	writeJSON(w, http.StatusOK, APIResponse{
@@ -402,6 +407,129 @@ func (a *APIServer) handleServerControl(w http.ResponseWriter, r *http.Request) 
 			},
 		})
 
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{
+			Code:    http.StatusMethodNotAllowed,
+			Message: "Method Not Allowed",
+		})
+	}
+}
+
+func (a *APIServer) handleConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, APIResponse{
+			Code:    http.StatusOK,
+			Message: "success",
+			Data: map[string]interface{}{
+				"download_dir": a.engine.GetDownloadDir(),
+				"client_port":  a.engine.cfg.ClientPort,
+				"server_port":  a.engine.cfg.ServerPort,
+				"api_port":     a.engine.cfg.APIPort,
+				"strategy":     a.engine.cfg.Strategy,
+				"listen_addr":  a.engine.cfg.ListenAddr,
+			},
+		})
+	case http.MethodPost:
+		var req struct {
+			DownloadDir string `json:"download_dir"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, APIResponse{
+				Code:    http.StatusBadRequest,
+				Message: "invalid JSON body",
+			})
+			return
+		}
+
+		if req.DownloadDir != "" {
+			if err := a.engine.SetDownloadDir(req.DownloadDir); err != nil {
+				writeJSON(w, http.StatusInternalServerError, APIResponse{
+					Code:    http.StatusInternalServerError,
+					Message: fmt.Sprintf("failed to update download directory: %v", err),
+				})
+				return
+			}
+		}
+
+		writeJSON(w, http.StatusOK, APIResponse{
+			Code:    http.StatusOK,
+			Message: "config updated successfully",
+			Data: map[string]interface{}{
+				"download_dir": a.engine.GetDownloadDir(),
+			},
+		})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{
+			Code:    http.StatusMethodNotAllowed,
+			Message: "Method Not Allowed",
+		})
+	}
+}
+
+func (a *APIServer) handleFileProgress(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{
+			Code:    http.StatusMethodNotAllowed,
+			Message: "Method Not Allowed",
+		})
+		return
+	}
+
+	progress := a.engine.GetTransferProgress()
+	writeJSON(w, http.StatusOK, APIResponse{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    progress,
+	})
+}
+
+func (a *APIServer) handleServiceControl(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		status, installed := GetServiceStatus()
+		writeJSON(w, http.StatusOK, APIResponse{
+			Code:    http.StatusOK,
+			Message: "success",
+			Data: map[string]interface{}{
+				"installed": installed,
+				"status":    status,
+			},
+		})
+	case http.MethodPost:
+		var req struct {
+			Action string `json:"action"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, APIResponse{
+				Code:    http.StatusBadRequest,
+				Message: "invalid JSON body",
+			})
+			return
+		}
+
+		actionLower := strings.ToLower(req.Action)
+		if actionLower != "install" && actionLower != "uninstall" && actionLower != "start" && actionLower != "stop" && actionLower != "update" {
+			writeJSON(w, http.StatusBadRequest, APIResponse{
+				Code:    http.StatusBadRequest,
+				Message: fmt.Sprintf("unsupported service action: %s", req.Action),
+			})
+			return
+		}
+
+		actionErr := ControlService(actionLower, a.engine.cfg)
+		if actionErr != nil {
+			writeJSON(w, http.StatusInternalServerError, APIResponse{
+				Code:    http.StatusInternalServerError,
+				Message: fmt.Sprintf("failed to perform service action %s: %v", req.Action, actionErr),
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, APIResponse{
+			Code:    http.StatusOK,
+			Message: fmt.Sprintf("service action %s executed successfully", req.Action),
+		})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{
 			Code:    http.StatusMethodNotAllowed,

@@ -15,10 +15,12 @@ App → Client SOCKS5(:10081) → mDNS 局域网自动发现 → Server(:10080) 
 | 模块 | 职责 |
 |------|------|
 | `cmd/mops/main.go` | 程序唯一 CLI 入口 |
-| `pkg/mops/api.go` | RESTful HTTP API 服务 (`/api/v1/nodes`, `/api/v1/status`) |
+| `pkg/mops/api.go` | RESTful HTTP API 服务 (`/api/v1/nodes`, `/api/v1/status`, `/api/v1/files/transfer`, `/api/v1/files/progress`, `/api/v1/config`, `/api/v1/service`) |
 | `pkg/mops/api_test.go` | [单元测试] RESTful API 路由与响应测试 |
 | `pkg/mops/engine.go` | 内存静态引用 GOST 内核，管理监听、负载均衡与 Client/Server 侧全链路流量网速统计 |
 | `pkg/mops/engine_test.go` | [单元测试] 代理服务、流量与实时速率统计、节点更新测试 |
+| `pkg/mops/config.go` | 可执行文件同级目录 `config.json` 磁盘配置持久化读写模块 |
+| `pkg/mops/config_test.go` | [单元测试] 配置文件持久化保存、恢复与 JSON 损坏容错测试 |
 | `pkg/mops/discovery.go` | mDNS 局域网服务广播与搜寻 (`zeroconf`) |
 | `pkg/mops/discovery_test.go` | [单元测试] mDNS 发现与解析测试 |
 | `pkg/mops/proxy_windows.go` | Windows 注册表系统代理开关 (`golang.org/x/sys/windows/registry`) |

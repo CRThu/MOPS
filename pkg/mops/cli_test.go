@@ -81,7 +81,7 @@ func TestCLIStatusSubcommand(t *testing.T) {
 	apiPort := 10082
 	engine := NewEngine(Config{
 		APIPort:    apiPort,
-		ClientPort: 10899,
+		ClientPort: 10081,
 		ServerPort: 10080,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -112,13 +112,13 @@ func TestCLIClientSubcommand(t *testing.T) {
 	defer engine.Stop()
 
 	// Test client status, off, on
-	os.Args = []string{"mops", "client", "status"}
+	os.Args = []string{"mops", "--api-port", "10082", "client", "status"}
 	assert.NoError(t, Execute())
 
-	os.Args = []string{"mops", "client", "off"}
+	os.Args = []string{"mops", "--api-port", "10082", "client", "off"}
 	assert.NoError(t, Execute())
 
-	os.Args = []string{"mops", "client", "on"}
+	os.Args = []string{"mops", "--api-port", "10082", "client", "on"}
 	assert.NoError(t, Execute())
 }
 
@@ -138,12 +138,12 @@ func TestCLIServerSubcommand(t *testing.T) {
 	defer engine.Stop()
 
 	// Test server status, off, on
-	os.Args = []string{"mops", "server", "status"}
+	os.Args = []string{"mops", "--api-port", "10082", "server", "status"}
 	assert.NoError(t, Execute())
 
-	os.Args = []string{"mops", "server", "off"}
+	os.Args = []string{"mops", "--api-port", "10082", "server", "off"}
 	assert.NoError(t, Execute())
 
-	os.Args = []string{"mops", "server", "on"}
+	os.Args = []string{"mops", "--api-port", "10082", "server", "on"}
 	assert.NoError(t, Execute())
 }

@@ -227,6 +227,25 @@ func controlServerViaAPI(apiPort int, action string) error {
 	return fmt.Errorf("invalid action: %s", action)
 }
 
+func controlServiceViaAPI(apiPort int, action string, cfg Config) error {
+	client := &http.Client{Timeout: 2 * time.Second}
+	urlStr := fmt.Sprintf("http://127.0.0.1:%d/api/v1/service", apiPort)
+
+	reqBody := map[string]interface{}{
+		"action": action,
+	}
+	b, _ := json.Marshal(reqBody)
+	resp, err := client.Post(urlStr, "application/json", bytes.NewReader(b))
+	if err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			fmt.Printf("Windows Service operation '%s' executed via API.\n", action)
+			return nil
+		}
+	}
+	return ControlService(action, cfg)
+}
+
 // Execute builds and executes the CLI commands.
 func Execute() error {
 	var (
@@ -395,7 +414,7 @@ func Execute() error {
 				Advertise:  advertise,
 				Strategy:   strategy,
 			}
-			err := ControlService(args[0], cfg)
+			err := controlServiceViaAPI(apiPort, args[0], cfg)
 			if err != nil {
 				return err
 			}

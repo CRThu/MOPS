@@ -475,3 +475,70 @@ func TestAPIInvalidBodyAndMethod(t *testing.T) {
 		respDel.Body.Close()
 	}
 }
+
+func TestAPIConfigProgressAndService(t *testing.T) {
+	apiPort := 10860
+	cfg := Config{
+		ServerPort:  10861,
+		ClientPort:  10862,
+		APIPort:     apiPort,
+		Hostname:    "ConfigTestNode",
+		DownloadDir: "./original_dir",
+	}
+
+	engine := NewEngine(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+
+	client := &http.Client{Timeout: 3 * time.Second}
+
+	// 1. GET /api/v1/config
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/config", apiPort))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	var cfgResp APIResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&cfgResp))
+	resp.Body.Close()
+	assert.Equal(t, 200, cfgResp.Code)
+
+	// 2. POST /api/v1/config (Update download_dir)
+	newDir := filepath.Join(os.TempDir(), "mops_api_download_test")
+	defer os.RemoveAll(newDir)
+
+	postBody, _ := json.Marshal(map[string]string{"download_dir": newDir})
+	resp, err = client.Post(fmt.Sprintf("http://127.0.0.1:%d/api/v1/config", apiPort), "application/json", bytes.NewBuffer(postBody))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+	assert.Equal(t, newDir, engine.GetDownloadDir())
+
+	// 3. GET /api/v1/files/progress
+	resp, err = client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/files/progress", apiPort))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	var progResp APIResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&progResp))
+	resp.Body.Close()
+	assert.Equal(t, 200, progResp.Code)
+
+	// 4. GET /api/v1/service
+	resp, err = client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/service", apiPort))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	var svcResp APIResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&svcResp))
+	resp.Body.Close()
+	assert.Equal(t, 200, svcResp.Code)
+
+	// 5. POST /api/v1/service (Invalid Action -> 400 Bad Request)
+	badBody, _ := json.Marshal(map[string]string{"action": "invalid_action_xyz"})
+	resp, err = client.Post(fmt.Sprintf("http://127.0.0.1:%d/api/v1/service", apiPort), "application/json", bytes.NewBuffer(badBody))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+}

@@ -229,3 +229,73 @@ curl -X POST "http://127.0.0.1:10082/api/v1/files/transfer?target_ip=192.168.132
 }
 ```
 
+---
+
+## 7. 获取当前文件传输进度
+
+查询当前正在进行或刚完成的文件发送/接收实时百分比与进度信息。
+
+- **请求方法**: `GET`
+- **请求路径**: `/api/v1/files/progress`
+
+### 响应示例
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "file_name": "demo.mp4",
+    "transferred_bytes": 52428800,
+    "total_bytes": 104857600,
+    "percentage": 50.0,
+    "status": "TRANSFERRING",
+    "direction": "SEND"
+  }
+}
+```
+
+---
+
+## 8. 查询与修改引擎配置（如文件保存路径）
+
+查询当前引擎参数配置或动态修改接收文件的保存目录 `download_dir`。
+
+- **请求路径**: `/api/v1/config`
+- **请求方法**:
+  - `GET`: 查询当前引擎配置参数
+  - `POST`: 动态设置保存路径 (`{"download_dir": "D:/Downloads"}`)
+
+### POST 请求与响应示例
+
+```json
+{
+  "code": 200,
+  "message": "config updated successfully",
+  "data": {
+    "download_dir": "D:/Downloads"
+  }
+}
+```
+
+---
+
+## 9. 查询与管理 Windows 系统服务常驻
+
+查询 Windows 后台服务安装状态或动态控制服务的安装、卸载、启动与停止。
+
+- **请求路径**: `/api/v1/service`
+- **请求方法**:
+  - `GET`: 查询服务是否已安装
+  - `POST`: 执行服务控制 (`{"action": "install" | "uninstall" | "start" | "stop"}`)
+
+### POST 响应示例
+
+```json
+{
+  "code": 200,
+  "message": "service action install executed successfully"
+}
+```
+
+

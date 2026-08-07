@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -95,6 +96,7 @@ func ControlService(action string, cfg Config) error {
 		if sErr == nil {
 			if _, statusErr := sCheck.Status(); statusErr == nil {
 				fmt.Println("[INFO] Service 'mops' is already installed. Use 'mops service update' to overwrite and update.")
+				setupFirewallRules()
 				return nil
 			}
 		}
@@ -112,7 +114,11 @@ func ControlService(action string, cfg Config) error {
 		if err != nil {
 			return fmt.Errorf("failed to initialize Windows service: %w", err)
 		}
-		return s.Install()
+		instErr := s.Install()
+		if instErr == nil {
+			setupFirewallRules()
+		}
+		return instErr
 
 	case "update":
 		pf := os.Getenv("ProgramFiles")
@@ -140,6 +146,7 @@ func ControlService(action string, cfg Config) error {
 		if err := s.Install(); err != nil {
 			return fmt.Errorf("failed to re-install upgraded service: %w", err)
 		}
+		setupFirewallRules()
 		return s.Start()
 
 	case "uninstall":
@@ -217,4 +224,38 @@ func resolveServiceExecutable(targetExe string) string {
 		}
 	}
 	return cleanDst
+}
+
+func setupFirewallRules() {
+	cmd1 := exec.Command("netsh", "advfirewall", "firewall", "add", "rule", "name=MOPS System Service", "dir=in", "action=allow", "protocol=TCP", "localport=10080,10081,10082", "profile=any")
+	_ = cmd1.Run()
+
+	cmd2 := exec.Command("netsh", "advfirewall", "firewall", "add", "rule", "name=MOPS mDNS Discovery", "dir=in", "action=allow", "protocol=UDP", "localport=5353", "profile=any")
+	_ = cmd2.Run()
+}
+
+// GetServiceStatus returns status string and whether service is installed.
+func GetServiceStatus() (string, bool) {
+	svcConfig := &service.Config{
+		Name:        "mops",
+		DisplayName: "MOPS Proxy Service",
+		Description: "Multi-node Outbound Proxy System Service for Windows",
+	}
+	prg := &program{}
+	s, err := service.New(prg, svcConfig)
+	if err != nil {
+		return "Unknown", false
+	}
+	status, err := s.Status()
+	if err != nil {
+		return "NotInstalled", false
+	}
+	switch status {
+	case service.StatusRunning:
+		return "Running", true
+	case service.StatusStopped:
+		return "Stopped", true
+	default:
+		return "Installed", true
+	}
 }

@@ -658,4 +658,24 @@ func TestEngineSetClientAndServerEnabled(t *testing.T) {
 	require.NoError(t, engine.SetServerEnabled(true)) // repeat enable
 }
 
+func TestEngineDownloadDirAndProgress(t *testing.T) {
+	eng := NewEngine(Config{
+		DownloadDir: "./test_downloads",
+	})
+	assert.Equal(t, "./test_downloads", eng.GetDownloadDir())
+
+	newDir := filepath.Join(os.TempDir(), "mops_custom_downloads")
+	defer os.RemoveAll(newDir)
+
+	err := eng.SetDownloadDir(newDir)
+	require.NoError(t, err)
+	assert.Equal(t, newDir, eng.GetDownloadDir())
+
+	err = eng.SetDownloadDir("")
+	assert.Error(t, err)
+
+	prog := eng.GetTransferProgress()
+	assert.Equal(t, "IDLE", prog.Status)
+}
+
 

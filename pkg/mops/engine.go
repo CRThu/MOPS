@@ -50,6 +50,16 @@ type Node struct {
 	IsMe       bool      `json:"is_me"`
 }
 
+// TransferProgress represents real-time file transfer progress metadata.
+type TransferProgress struct {
+	FileName         string  `json:"file_name"`
+	TransferredBytes int64   `json:"transferred_bytes"`
+	TotalBytes       int64   `json:"total_bytes"`
+	Percentage       float64 `json:"percentage"`
+	Status           string  `json:"status"` // "IDLE", "TRANSFERRING", "COMPLETED", "FAILED"
+	Direction        string  `json:"direction"` // "SEND" or "RECEIVE"
+}
+
 // Config defines the configuration for MOPS Engine.
 type Config struct {
 	ServerPort  int
@@ -90,20 +100,56 @@ type Engine struct {
 	lastUp    uint64
 	lastDown  uint64
 	lastCalc  time.Time
+
+	// Active file transfer progress
+	progress TransferProgress
 }
 
 // NewEngine creates a new proxy Engine instance.
 func NewEngine(cfg Config) *Engine {
+	persistent := LoadPersistentConfig(cfg)
+	if cfg.ServerPort > 0 {
+		persistent.ServerPort = cfg.ServerPort
+	}
+	if cfg.ClientPort > 0 {
+		persistent.ClientPort = cfg.ClientPort
+	}
+	if cfg.APIPort > 0 {
+		persistent.APIPort = cfg.APIPort
+	}
+	if cfg.ListenAddr != "" {
+		persistent.ListenAddr = cfg.ListenAddr
+	}
+	if cfg.Hostname != "" {
+		persistent.Hostname = cfg.Hostname
+	}
+	if cfg.Advertise != "" {
+		persistent.Advertise = cfg.Advertise
+	}
+	if cfg.Strategy != "" {
+		persistent.Strategy = cfg.Strategy
+	}
+	if cfg.DownloadDir != "" {
+		persistent.DownloadDir = cfg.DownloadDir
+	}
+
+	cfg = persistent
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = "127.0.0.1"
 	}
 	if cfg.Strategy == "" {
 		cfg.Strategy = "random"
 	}
+	if cfg.DownloadDir == "" {
+		cfg.DownloadDir = "./downloads"
+	}
 	return &Engine{
 		cfg:      cfg,
 		nodes:    make(map[string]*Node),
 		lastCalc: time.Now(),
+		progress: TransferProgress{
+			Status: "IDLE",
+		},
 	}
 }
 
@@ -374,6 +420,60 @@ func (e *Engine) GetSpeed() (float64, float64) {
 	return e.speedUp, e.speedDown
 }
 
+// SetDownloadDir dynamically updates the file download save directory.
+func (e *Engine) SetDownloadDir(dir string) error {
+	if dir == "" {
+		return fmt.Errorf("download directory cannot be empty")
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create download directory %s: %w", dir, err)
+	}
+	e.mu.Lock()
+	e.cfg.DownloadDir = dir
+	cfgCopy := e.cfg
+	e.mu.Unlock()
+
+	_ = SavePersistentConfig(cfgCopy)
+	return nil
+}
+
+// GetDownloadDir returns the configured download directory.
+func (e *Engine) GetDownloadDir() string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.cfg.DownloadDir == "" {
+		return "./downloads"
+	}
+	return e.cfg.DownloadDir
+}
+
+// GetTransferProgress returns the current file transfer progress.
+func (e *Engine) GetTransferProgress() TransferProgress {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.progress
+}
+
+func (e *Engine) updateTransferProgress(fileName string, transferred, total int64, status, direction string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var pct float64
+	if total > 0 {
+		pct = float64(transferred) / float64(total) * 100.0
+		if pct > 100.0 {
+			pct = 100.0
+		}
+	}
+	e.progress = TransferProgress{
+		FileName:         fileName,
+		TransferredBytes: transferred,
+		TotalBytes:       total,
+		Percentage:       pct,
+		Status:           status,
+		Direction:        direction,
+	}
+}
+
 // selectNode picks a target node using Round-Robin.
 func (e *Engine) selectNode() (*Node, error) {
 	e.mu.RLock()
@@ -446,7 +546,9 @@ func (e *Engine) handleServerConn(conn net.Conn) {
 }
 
 func (e *Engine) handleIncomingFile(reader io.Reader, hdr Header, meNode *Node) {
+	e.mu.RLock()
 	saveDir := e.cfg.DownloadDir
+	e.mu.RUnlock()
 	if saveDir == "" {
 		saveDir = "./downloads"
 	}
@@ -454,22 +556,28 @@ func (e *Engine) handleIncomingFile(reader io.Reader, hdr Header, meNode *Node) 
 	filePath := getUniqueFilePath(saveDir, hdr.FileName)
 	outFile, err := os.Create(filePath)
 	if err != nil {
+		e.updateTransferProgress(hdr.FileName, 0, hdr.FileSize, "FAILED", "RECEIVE")
 		return
 	}
+
+	e.updateTransferProgress(hdr.FileName, 0, hdr.FileSize, "TRANSFERRING", "RECEIVE")
 
 	limitReader := io.LimitReader(reader, hdr.FileSize)
 	hasher := sha256.New()
 	buf := make([]byte, 1024*1024) // 1MB Buffer
+	var transferred int64
 
 	for {
 		n, err := limitReader.Read(buf)
 		if n > 0 {
+			transferred += int64(n)
 			atomic.AddUint64(&e.bytesDown, uint64(n))
 			if meNode != nil {
 				atomic.AddUint64(&meNode.BytesDown, uint64(n))
 			}
 			_, _ = outFile.Write(buf[:n])
 			_, _ = hasher.Write(buf[:n])
+			e.updateTransferProgress(hdr.FileName, transferred, hdr.FileSize, "TRANSFERRING", "RECEIVE")
 		}
 		if err != nil {
 			break
@@ -488,10 +596,12 @@ func (e *Engine) handleIncomingFile(reader io.Reader, hdr Header, meNode *Node) 
 			calcHash := fmt.Sprintf("sha256:%s", hex.EncodeToString(hasher.Sum(nil)))
 			if calcHash != tr.FileHash {
 				_ = os.Remove(filePath)
+				e.updateTransferProgress(hdr.FileName, transferred, hdr.FileSize, "FAILED", "RECEIVE")
 				return
 			}
 		}
 	}
+	e.updateTransferProgress(hdr.FileName, hdr.FileSize, hdr.FileSize, "COMPLETED", "RECEIVE")
 }
 
 func getUniqueFilePath(dir, fileName string) string {
@@ -523,9 +633,11 @@ func getUniqueFilePath(dir, fileName string) string {
 
 // SendFileToNode connects to a target node and streams file data using "file" protocol.
 func (e *Engine) SendFileToNode(targetIP string, targetPort int, fileName string, reader io.Reader, fileSize int64, fileHash string) (string, error) {
+	e.updateTransferProgress(fileName, 0, fileSize, "TRANSFERRING", "SEND")
 	addr := fmt.Sprintf("%s:%d", targetIP, targetPort)
 	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {
+		e.updateTransferProgress(fileName, 0, fileSize, "FAILED", "SEND")
 		return "", fmt.Errorf("failed to connect to node %s: %w", addr, err)
 	}
 	defer conn.Close()
@@ -541,29 +653,36 @@ func (e *Engine) SendFileToNode(targetIP string, targetPort int, fileName string
 
 	data, err := json.Marshal(hdr)
 	if err != nil {
+		e.updateTransferProgress(fileName, 0, fileSize, "FAILED", "SEND")
 		return "", err
 	}
 	data = append(data, '\n')
 	if _, err := conn.Write(data); err != nil {
+		e.updateTransferProgress(fileName, 0, fileSize, "FAILED", "SEND")
 		return "", err
 	}
 
 	hasher := sha256.New()
 	buf := make([]byte, 1024*1024) // 1MB Buffer
+	var transferred int64
 
 	for {
 		n, rerr := reader.Read(buf)
 		if n > 0 {
+			transferred += int64(n)
 			atomic.AddUint64(&e.bytesUp, uint64(n))
 			_, _ = hasher.Write(buf[:n])
 			if _, werr := conn.Write(buf[:n]); werr != nil {
+				e.updateTransferProgress(fileName, transferred, fileSize, "FAILED", "SEND")
 				return "", werr
 			}
+			e.updateTransferProgress(fileName, transferred, fileSize, "TRANSFERRING", "SEND")
 		}
 		if rerr != nil {
 			if rerr == io.EOF {
 				break
 			}
+			e.updateTransferProgress(fileName, transferred, fileSize, "FAILED", "SEND")
 			return "", rerr
 		}
 	}
@@ -578,11 +697,18 @@ func (e *Engine) SendFileToNode(targetIP string, targetPort int, fileName string
 	}
 	trData, err := json.Marshal(tr)
 	if err != nil {
+		e.updateTransferProgress(fileName, transferred, fileSize, "FAILED", "SEND")
 		return "", err
 	}
 	trData = append(trData, '\n')
 	_, err = conn.Write(trData)
-	return fileHash, err
+	if err != nil {
+		e.updateTransferProgress(fileName, transferred, fileSize, "FAILED", "SEND")
+		return "", err
+	}
+
+	e.updateTransferProgress(fileName, fileSize, fileSize, "COMPLETED", "SEND")
+	return fileHash, nil
 }
 
 func (e *Engine) relayServerWithStats(conn net.Conn, connReader io.Reader, targetConn net.Conn, meNode *Node) {
