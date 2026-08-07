@@ -72,14 +72,32 @@ func TestExecutableBlackbox(t *testing.T) {
 	})
 
 	t.Run("Exec_Proxy_Status", func(t *testing.T) {
-		cmd := exec.Command(exePath, "proxy", "status")
+		daemonCmd := exec.Command(exePath, "run", "--api-port", "10991")
+		require.NoError(t, daemonCmd.Start())
+		defer func() {
+			if daemonCmd.Process != nil {
+				_ = daemonCmd.Process.Kill()
+			}
+		}()
+		time.Sleep(300 * time.Millisecond)
+
+		cmd := exec.Command(exePath, "proxy", "status", "--api-port", "10991")
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err)
 		assert.Contains(t, string(out), "System Proxy is")
 	})
 
 	t.Run("Exec_Status_Once", func(t *testing.T) {
-		cmd := exec.Command(exePath, "status")
+		daemonCmd := exec.Command(exePath, "run", "--api-port", "10992")
+		require.NoError(t, daemonCmd.Start())
+		defer func() {
+			if daemonCmd.Process != nil {
+				_ = daemonCmd.Process.Kill()
+			}
+		}()
+		time.Sleep(300 * time.Millisecond)
+
+		cmd := exec.Command(exePath, "status", "--api-port", "10992")
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err)
 		assert.Contains(t, string(out), "MOPS Multi-node Proxy Cluster Status")

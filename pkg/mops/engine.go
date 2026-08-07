@@ -73,8 +73,10 @@ type Engine struct {
 	clientListener net.Listener
 	apiServer      *APIServer
 
-	running bool
-	cancel  context.CancelFunc
+	running       bool
+	serverRunning bool
+	clientRunning bool
+	cancel        context.CancelFunc
 
 	rrIndex uint64 // Round-Robin counter
 
@@ -147,6 +149,7 @@ func (e *Engine) Start(ctx context.Context) error {
 			return fmt.Errorf("failed to start server listener on %s: %w", srvAddr, err)
 		}
 		e.serverListener = l
+		e.serverRunning = true
 		go e.acceptServer(l)
 	}
 
@@ -161,6 +164,7 @@ func (e *Engine) Start(ctx context.Context) error {
 			return fmt.Errorf("failed to start client listener on %s: %w", cliAddr, err)
 		}
 		e.clientListener = l
+		e.clientRunning = true
 		go e.acceptClient(l)
 	}
 
@@ -194,6 +198,9 @@ func (e *Engine) Stop() {
 		return
 	}
 	e.running = false
+	e.serverRunning = false
+	e.clientRunning = false
+
 	if e.cancel != nil {
 		e.cancel()
 	}
@@ -207,6 +214,108 @@ func (e *Engine) Stop() {
 	}
 	if e.clientListener != nil {
 		e.clientListener.Close()
+	}
+}
+
+// GetClientEnabled returns whether client proxy is currently running.
+func (e *Engine) GetClientEnabled() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.clientRunning
+}
+
+// GetServerEnabled returns whether server proxy is currently running.
+func (e *Engine) GetServerEnabled() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.serverRunning
+}
+
+// SetClientEnabled dynamically starts or stops the client SOCKS5 listener.
+func (e *Engine) SetClientEnabled(enable bool) error {
+	e.mu.Lock()
+	if !e.running {
+		e.mu.Unlock()
+		return fmt.Errorf("engine is not running")
+	}
+
+	if enable {
+		if e.clientRunning {
+			e.mu.Unlock()
+			return nil
+		}
+		if e.cfg.ClientPort <= 0 {
+			e.mu.Unlock()
+			return fmt.Errorf("client port is disabled or invalid (%d)", e.cfg.ClientPort)
+		}
+		cliAddr := fmt.Sprintf("%s:%d", e.cfg.ListenAddr, e.cfg.ClientPort)
+		l, err := net.Listen("tcp", cliAddr)
+		if err != nil {
+			e.mu.Unlock()
+			return fmt.Errorf("failed to start client listener on %s: %w", cliAddr, err)
+		}
+		e.clientListener = l
+		e.clientRunning = true
+		e.mu.Unlock()
+
+		go e.acceptClient(l)
+		return nil
+	} else {
+		if !e.clientRunning {
+			e.mu.Unlock()
+			return nil
+		}
+		if e.clientListener != nil {
+			_ = e.clientListener.Close()
+			e.clientListener = nil
+		}
+		e.clientRunning = false
+		e.mu.Unlock()
+		return nil
+	}
+}
+
+// SetServerEnabled dynamically starts or stops the server TCP listener.
+func (e *Engine) SetServerEnabled(enable bool) error {
+	e.mu.Lock()
+	if !e.running {
+		e.mu.Unlock()
+		return fmt.Errorf("engine is not running")
+	}
+
+	if enable {
+		if e.serverRunning {
+			e.mu.Unlock()
+			return nil
+		}
+		if e.cfg.ServerPort <= 0 {
+			e.mu.Unlock()
+			return fmt.Errorf("server port is disabled or invalid (%d)", e.cfg.ServerPort)
+		}
+		srvAddr := fmt.Sprintf("0.0.0.0:%d", e.cfg.ServerPort)
+		l, err := net.Listen("tcp", srvAddr)
+		if err != nil {
+			e.mu.Unlock()
+			return fmt.Errorf("failed to start server listener on %s: %w", srvAddr, err)
+		}
+		e.serverListener = l
+		e.serverRunning = true
+		e.mu.Unlock()
+
+		go e.acceptServer(l)
+		return nil
+	} else {
+		if !e.serverRunning {
+			e.mu.Unlock()
+			return nil
+		}
+		if e.serverListener != nil {
+			_ = e.serverListener.Close()
+			e.serverListener = nil
+		}
+		e.serverRunning = false
+		e.mu.Unlock()
+		return nil
 	}
 }
 

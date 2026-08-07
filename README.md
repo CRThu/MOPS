@@ -33,13 +33,20 @@ go build -o mops.exe ./cmd/mops
 # 查看 Tailscale 风格集群状态 (加上 -w 可实时轮询刷新)
 .\mops.exe status -w
 
-# Windows 系统代理控制
+# Windows 系统代理与环境变量控制 (支持自定义地址/清空)
 .\mops.exe proxy on
+.\mops.exe proxy set 127.0.0.1:7890
+.\mops.exe proxy clear
 .\mops.exe proxy off
 .\mops.exe proxy status
 
-# Windows 原生系统服务守护
+# 动态开启/关闭/查看 SOCKS5 客户端与 TCP 服务端代理
+.\mops.exe client on|off|status
+.\mops.exe server on|off|status
+
+# Windows 原生系统服务守护 (标准自动安装至 C:\Program Files\MOPS\)
 .\mops.exe service install
+.\mops.exe service update
 .\mops.exe service start
 .\mops.exe service stop
 .\mops.exe service uninstall

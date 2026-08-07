@@ -1,6 +1,7 @@
 package mops
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -278,4 +280,198 @@ func TestAPIFileTransferNotFound(t *testing.T) {
 	err = json.NewDecoder(resp.Body).Decode(&apiResp)
 	require.NoError(t, err)
 	require.Equal(t, 400, apiResp.Code)
+}
+
+func TestAPISystemProxy(t *testing.T) {
+	origInfo, _ := GetSystemProxyInfo()
+	defer func() {
+		_ = RestoreSystemProxyInfo(origInfo)
+	}()
+
+	apiPort := 10845
+	cfg := Config{
+		ServerPort: 10846,
+		ClientPort: 10847,
+		APIPort:    apiPort,
+		Hostname:   "ProxyAPINode",
+	}
+
+	engine := NewEngine(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// GET /api/v1/system-proxy
+	getURL := fmt.Sprintf("http://127.0.0.1:%d/api/v1/system-proxy", apiPort)
+	resp, err := http.Get(getURL)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+
+	// POST /api/v1/system-proxy (action: set custom address)
+	postBody, _ := json.Marshal(map[string]interface{}{
+		"action":     "set",
+		"proxy_addr": "127.0.0.1:7890",
+	})
+	respPost, err := http.Post(getURL, "application/json", bytes.NewReader(postBody))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, respPost.StatusCode)
+
+	var setResp struct {
+		Code int             `json:"code"`
+		Data SystemProxyInfo `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(respPost.Body).Decode(&setResp))
+	respPost.Body.Close()
+	assert.True(t, setResp.Data.Enabled)
+	assert.Equal(t, "127.0.0.1:7890", setResp.Data.ProxyServer)
+	assert.Equal(t, "http://127.0.0.1:7890", setResp.Data.HttpProxy)
+
+	// POST /api/v1/system-proxy (action: clear)
+	postClear, _ := json.Marshal(map[string]interface{}{
+		"action": "clear",
+	})
+	respClear, err := http.Post(getURL, "application/json", bytes.NewReader(postClear))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, respClear.StatusCode)
+
+	var clearResp struct {
+		Code int             `json:"code"`
+		Data SystemProxyInfo `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(respClear.Body).Decode(&clearResp))
+	respClear.Body.Close()
+	assert.False(t, clearResp.Data.Enabled)
+	assert.Empty(t, clearResp.Data.HttpProxy)
+}
+
+func TestAPIClientControl(t *testing.T) {
+	apiPort := 10850
+	clientPort := 10851
+	cfg := Config{
+		ServerPort: 10852,
+		ClientPort: clientPort,
+		APIPort:    apiPort,
+		Hostname:   "ClientControlNode",
+	}
+
+	engine := NewEngine(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/v1/client", apiPort)
+
+	// 1. GET status
+	resp, err := http.Get(url)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+
+	// 2. Stop Client via POST
+	stopBody, _ := json.Marshal(map[string]interface{}{"enable": false})
+	respStop, err := http.Post(url, "application/json", bytes.NewReader(stopBody))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, respStop.StatusCode)
+	respStop.Body.Close()
+	require.False(t, engine.GetClientEnabled())
+
+	// 3. Start Client via POST
+	startBody, _ := json.Marshal(map[string]interface{}{"enable": true})
+	respStart, err := http.Post(url, "application/json", bytes.NewReader(startBody))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, respStart.StatusCode)
+	respStart.Body.Close()
+	require.True(t, engine.GetClientEnabled())
+}
+
+func TestAPIServerControl(t *testing.T) {
+	apiPort := 10855
+	serverPort := 10856
+	cfg := Config{
+		ServerPort: serverPort,
+		ClientPort: 10857,
+		APIPort:    apiPort,
+		Hostname:   "ServerControlNode",
+	}
+
+	engine := NewEngine(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/v1/server", apiPort)
+
+	// 1. GET status
+	resp, err := http.Get(url)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+
+	// 2. Stop Server via POST
+	stopBody, _ := json.Marshal(map[string]interface{}{"enable": false})
+	respStop, err := http.Post(url, "application/json", bytes.NewReader(stopBody))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, respStop.StatusCode)
+	respStop.Body.Close()
+	require.False(t, engine.GetServerEnabled())
+
+	// 3. Start Server via POST
+	startBody, _ := json.Marshal(map[string]interface{}{"enable": true})
+	respStart, err := http.Post(url, "application/json", bytes.NewReader(startBody))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, respStart.StatusCode)
+	respStart.Body.Close()
+	require.True(t, engine.GetServerEnabled())
+}
+
+func TestAPIInvalidBodyAndMethod(t *testing.T) {
+	apiPort := 10858
+	cfg := Config{
+		ServerPort: 10859,
+		ClientPort: 10860,
+		APIPort:    apiPort,
+	}
+
+	engine := NewEngine(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+
+	endpoints := []string{"system-proxy", "client", "server"}
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	for _, ep := range endpoints {
+		url := fmt.Sprintf("http://127.0.0.1:%d/api/v1/%s", apiPort, ep)
+
+		// Invalid JSON POST body -> 400
+		respBad, err := client.Post(url, "application/json", bytes.NewBufferString("{invalid_json}"))
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusBadRequest, respBad.StatusCode)
+		respBad.Body.Close()
+
+		// Method Not Allowed (DELETE) -> 405
+		reqDel, err := http.NewRequest(http.MethodDelete, url, nil)
+		require.NoError(t, err)
+		respDel, err := client.Do(reqDel)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusMethodNotAllowed, respDel.StatusCode)
+		respDel.Body.Close()
+	}
 }

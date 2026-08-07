@@ -1,6 +1,7 @@
 package mops
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -55,6 +56,174 @@ func fetchStatusFromAPI(apiPort int) (*StatusData, []*Node, error) {
 	}
 
 	return &statusWrapper.Data, nodesWrapper.Data, nil
+}
+
+func controlSystemProxyViaAPI(apiPort int, action string, customAddr string) error {
+	client := &http.Client{Timeout: 2 * time.Second}
+	urlStr := fmt.Sprintf("http://127.0.0.1:%d/api/v1/system-proxy", apiPort)
+
+	switch action {
+	case "on", "off", "set", "clear":
+		reqBody := map[string]interface{}{
+			"action":     action,
+			"proxy_addr": customAddr,
+		}
+		b, _ := json.Marshal(reqBody)
+		resp, err := client.Post(urlStr, "application/json", bytes.NewReader(b))
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("unexpected API status code: %d", resp.StatusCode)
+		}
+		if action == "on" || action == "set" {
+			if customAddr == "" {
+				fmt.Println("Windows System Proxy enabled & environment variables set via API.")
+			} else {
+				fmt.Printf("Windows System Proxy enabled & environment variables set via API -> %s\n", customAddr)
+			}
+		} else {
+			fmt.Println("Windows System Proxy disabled & environment variables cleared via API.")
+		}
+		return nil
+
+	case "status":
+		resp, err := client.Get(urlStr)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("unexpected API status code: %d", resp.StatusCode)
+		}
+		var wrapper struct {
+			Code int             `json:"code"`
+			Data SystemProxyInfo `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+			return err
+		}
+		if wrapper.Data.Enabled {
+			fmt.Printf("System Proxy is ON (API) -> %s\n", wrapper.Data.ProxyServer)
+		} else {
+			fmt.Println("System Proxy is OFF (API)")
+		}
+		fmt.Printf("HTTP_PROXY:  %s\n", wrapper.Data.HttpProxy)
+		fmt.Printf("HTTPS_PROXY: %s\n", wrapper.Data.HttpsProxy)
+		fmt.Printf("ALL_PROXY:   %s\n", wrapper.Data.AllProxy)
+		fmt.Printf("NO_PROXY:    %s\n", wrapper.Data.NoProxy)
+		return nil
+	}
+	return fmt.Errorf("invalid action: %s", action)
+}
+
+func controlClientViaAPI(apiPort int, action string) error {
+	client := &http.Client{Timeout: 2 * time.Second}
+	urlStr := fmt.Sprintf("http://127.0.0.1:%d/api/v1/client", apiPort)
+
+	switch action {
+	case "on", "off":
+		reqBody := map[string]interface{}{
+			"enable": action == "on",
+		}
+		b, _ := json.Marshal(reqBody)
+		resp, err := client.Post(urlStr, "application/json", bytes.NewReader(b))
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("unexpected API status code: %d", resp.StatusCode)
+		}
+		if action == "on" {
+			fmt.Println("Client SOCKS5 Proxy listener started via API.")
+		} else {
+			fmt.Println("Client SOCKS5 Proxy listener stopped via API.")
+		}
+		return nil
+
+	case "status":
+		resp, err := client.Get(urlStr)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("unexpected API status code: %d", resp.StatusCode)
+		}
+		var wrapper struct {
+			Code int `json:"code"`
+			Data struct {
+				Enabled bool `json:"enabled"`
+				Port    int  `json:"port"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+			return err
+		}
+		if wrapper.Data.Enabled {
+			fmt.Printf("Client SOCKS5 Proxy is ON -> port :%d\n", wrapper.Data.Port)
+		} else {
+			fmt.Println("Client SOCKS5 Proxy is OFF")
+		}
+		return nil
+	}
+	return fmt.Errorf("invalid action: %s", action)
+}
+
+func controlServerViaAPI(apiPort int, action string) error {
+	client := &http.Client{Timeout: 2 * time.Second}
+	urlStr := fmt.Sprintf("http://127.0.0.1:%d/api/v1/server", apiPort)
+
+	switch action {
+	case "on", "off":
+		reqBody := map[string]interface{}{
+			"enable": action == "on",
+		}
+		b, _ := json.Marshal(reqBody)
+		resp, err := client.Post(urlStr, "application/json", bytes.NewReader(b))
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("unexpected API status code: %d", resp.StatusCode)
+		}
+		if action == "on" {
+			fmt.Println("Server TCP Proxy listener started via API.")
+		} else {
+			fmt.Println("Server TCP Proxy listener stopped via API.")
+		}
+		return nil
+
+	case "status":
+		resp, err := client.Get(urlStr)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("unexpected API status code: %d", resp.StatusCode)
+		}
+		var wrapper struct {
+			Code int `json:"code"`
+			Data struct {
+				Enabled bool `json:"enabled"`
+				Port    int  `json:"port"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+			return err
+		}
+		if wrapper.Data.Enabled {
+			fmt.Printf("Server TCP Proxy is ON -> port :%d\n", wrapper.Data.Port)
+		} else {
+			fmt.Println("Server TCP Proxy is OFF")
+		}
+		return nil
+	}
+	return fmt.Errorf("invalid action: %s", action)
 }
 
 // Execute builds and executes the CLI commands.
@@ -128,66 +297,26 @@ func Execute() error {
 		Use:   "status",
 		Short: "Show cluster status in terminal",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// 1. Try to fetch status from running daemon via REST API first
 			statusData, nodes, err := fetchStatusFromAPI(apiPort)
-			if err == nil {
-				if !watch {
-					fmt.Print(RenderStatus(nodes, statusData.Strategy, statusData.ClientPort, statusData.SpeedUp, statusData.SpeedDown))
-					return nil
-				}
-
-				for {
-					statusData, nodes, err := fetchStatusFromAPI(apiPort)
-					if err != nil {
-						fmt.Printf("\n[WARNING] Lost connection to daemon API: %v\n", err)
-						return nil
-					}
-					fmt.Print("\033[H\033[2J") // Clear terminal screen
-					fmt.Print(RenderStatus(nodes, statusData.Strategy, statusData.ClientPort, statusData.SpeedUp, statusData.SpeedDown))
-					time.Sleep(1 * time.Second)
-				}
+			if err != nil {
+				return fmt.Errorf("MOPS daemon service is not running: %w (start service via 'mops service start' or 'mops run')", err)
 			}
-
-			// 2. Fallback to standalone scanner if API is unreachable
-			cfg := Config{
-				ServerPort: serverPort,
-				ClientPort: clientPort,
-				APIPort:    apiPort,
-				ListenAddr: listenAddr,
-				Hostname:   hostname,
-				Advertise:  advertise,
-				Strategy:   strategy,
-			}
-			engine := NewEngine(cfg)
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-
-			_ = engine.Start(ctx)
-			discovery := NewDiscovery(engine)
-			_ = discovery.Start(ctx)
 
 			if !watch {
-				// Single status check: browse mDNS for 1.5s to gather all LAN nodes
-				time.Sleep(1500 * time.Millisecond)
-				nodes := engine.GetNodes()
-				speedUp, speedDown := engine.GetSpeed()
-				fmt.Print(RenderStatus(nodes, strategy, clientPort, speedUp, speedDown))
+				fmt.Print(RenderStatus(nodes, statusData.Strategy, statusData.ClientPort, statusData.SpeedUp, statusData.SpeedDown))
 				return nil
 			}
 
-			// Watch mode: continuously poll and refresh
 			for {
-				nodes := engine.GetNodes()
-				speedUp, speedDown := engine.GetSpeed()
-
+				statusData, nodes, err := fetchStatusFromAPI(apiPort)
+				if err != nil {
+					fmt.Printf("\n[WARNING] Lost connection to daemon API: %v\n", err)
+					return nil
+				}
 				fmt.Print("\033[H\033[2J") // Clear terminal screen
-				fmt.Print(RenderStatus(nodes, strategy, clientPort, speedUp, speedDown))
-
+				fmt.Print(RenderStatus(nodes, statusData.Strategy, statusData.ClientPort, statusData.SpeedUp, statusData.SpeedDown))
 				time.Sleep(1 * time.Second)
 			}
-			discovery.Stop()
-			engine.Stop()
-			return nil
 		},
 	}
 	statusCmd.Flags().BoolVarP(&watch, "watch", "w", false, "Watch status periodically")
@@ -195,45 +324,60 @@ func Execute() error {
 
 	// proxy command
 	proxyCmd := &cobra.Command{
-		Use:   "proxy [on|off|status]",
-		Short: "Manage Windows system proxy",
-		Args:  cobra.ExactArgs(1),
+		Use:   "proxy [on|off|set <addr>|clear|status]",
+		Short: "Manage Windows system proxy via REST API",
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			switch args[0] {
-			case "on":
-				addr := fmt.Sprintf("127.0.0.1:%d", clientPort)
-				err := SetSystemProxy(true, addr)
-				if err != nil {
-					return err
+			action := args[0]
+			customAddr := ""
+			if action == "set" {
+				if len(args) < 2 {
+					return fmt.Errorf("proxy set requires a target proxy address (e.g. mops proxy set 127.0.0.1:7890)")
 				}
-				fmt.Printf("Windows System Proxy enabled -> %s\n", addr)
-			case "off":
-				err := SetSystemProxy(false, "")
-				if err != nil {
-					return err
-				}
-				fmt.Println("Windows System Proxy disabled.")
-			case "status":
-				enabled, addr, err := GetSystemProxyStatus()
-				if err != nil {
-					return err
-				}
-				if enabled {
-					fmt.Printf("System Proxy is ON -> %s\n", addr)
-				} else {
-					fmt.Println("System Proxy is OFF")
-				}
-			default:
-				return fmt.Errorf("invalid action: %s. Use on, off, or status", args[0])
+				customAddr = args[1]
+			}
+			err := controlSystemProxyViaAPI(apiPort, action, customAddr)
+			if err != nil {
+				return fmt.Errorf("failed to control system proxy: %w (ensure MOPS daemon/service is running)", err)
 			}
 			return nil
 		},
 	}
 	rootCmd.AddCommand(proxyCmd)
 
+	// client command
+	clientCmd := &cobra.Command{
+		Use:   "client [on|off|status]",
+		Short: "Manage Client SOCKS5 Proxy listener via REST API",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			err := controlClientViaAPI(apiPort, args[0])
+			if err != nil {
+				return fmt.Errorf("failed to control client: %w (ensure MOPS daemon/service is running)", err)
+			}
+			return nil
+		},
+	}
+	rootCmd.AddCommand(clientCmd)
+
+	// server command
+	serverCmd := &cobra.Command{
+		Use:   "server [on|off|status]",
+		Short: "Manage Server TCP Proxy listener via REST API",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			err := controlServerViaAPI(apiPort, args[0])
+			if err != nil {
+				return fmt.Errorf("failed to control server: %w (ensure MOPS daemon/service is running)", err)
+			}
+			return nil
+		},
+	}
+	rootCmd.AddCommand(serverCmd)
+
 	// service command
 	serviceCmd := &cobra.Command{
-		Use:   "service [install|uninstall|start|stop]",
+		Use:   "service [install|update|uninstall|start|stop]",
 		Short: "Manage MOPS as Windows Service",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

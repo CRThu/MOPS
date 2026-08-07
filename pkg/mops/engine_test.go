@@ -616,4 +616,46 @@ func TestEngineTrafficAndSpeedStats(t *testing.T) {
 	assert.Greater(t, nodes[0].BytesDown, uint64(0))
 }
 
+func TestEngineSetClientAndServerEnabled(t *testing.T) {
+	// 1. Test before engine start
+	engineUnstarted := NewEngine(Config{ClientPort: 10860, ServerPort: 10861})
+	assert.ErrorContains(t, engineUnstarted.SetClientEnabled(true), "engine is not running")
+	assert.ErrorContains(t, engineUnstarted.SetServerEnabled(true), "engine is not running")
+
+	// 2. Start engine
+	clientPort := getFreePort()
+	serverPort := getFreePort()
+	cfg := Config{
+		ClientPort: clientPort,
+		ServerPort: serverPort,
+		APIPort:    getFreePort(),
+	}
+	engine := NewEngine(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	assert.True(t, engine.GetClientEnabled())
+	assert.True(t, engine.GetServerEnabled())
+
+	// 3. Test idempotent disable & enable
+	require.NoError(t, engine.SetClientEnabled(false))
+	assert.False(t, engine.GetClientEnabled())
+	require.NoError(t, engine.SetClientEnabled(false)) // repeat disable
+
+	require.NoError(t, engine.SetClientEnabled(true))
+	assert.True(t, engine.GetClientEnabled())
+	require.NoError(t, engine.SetClientEnabled(true)) // repeat enable
+
+	require.NoError(t, engine.SetServerEnabled(false))
+	assert.False(t, engine.GetServerEnabled())
+	require.NoError(t, engine.SetServerEnabled(false)) // repeat disable
+
+	require.NoError(t, engine.SetServerEnabled(true))
+	assert.True(t, engine.GetServerEnabled())
+	require.NoError(t, engine.SetServerEnabled(true)) // repeat enable
+}
+
 

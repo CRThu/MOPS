@@ -56,3 +56,17 @@ func TestRenderStatus(t *testing.T) {
 	assert.Contains(t, out, "node-02 (me)")
 	assert.Contains(t, out, "780.5 KB/s")
 }
+
+func TestRenderStatusWithProxyInfo(t *testing.T) {
+	proxyInfo := SystemProxyInfo{
+		Enabled:     true,
+		ProxyServer: "127.0.0.1:7890",
+		HttpProxy:   "http://127.0.0.1:7890",
+		AllProxy:    "socks5://127.0.0.1:7890",
+	}
+
+	out := RenderStatusWithProxyInfo(nil, "random", 10081, 0, 0, proxyInfo)
+	assert.Contains(t, out, "System Proxy: ON (127.0.0.1:7890)")
+	assert.Contains(t, out, "HTTP_PROXY: http://127.0.0.1:7890")
+	assert.Contains(t, out, "ALL_PROXY: socks5://127.0.0.1:7890")
+}

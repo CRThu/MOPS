@@ -2,11 +2,12 @@ package mops
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCLIVersionAndHelp(t *testing.T) {
@@ -23,12 +24,39 @@ func TestCLIVersionAndHelp(t *testing.T) {
 }
 
 func TestCLIProxySubcommand(t *testing.T) {
+	origInfo, _ := GetSystemProxyInfo()
+	defer func() {
+		_ = RestoreSystemProxyInfo(origInfo)
+	}()
+
 	oldArgs := os.Args
 	defer func() { os.Args = oldArgs }()
+
+	// Start engine for REST API
+	apiPort := 10082
+	engine := NewEngine(Config{
+		APIPort:    apiPort,
+		ClientPort: 10081,
+		ServerPort: 10080,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
 
 	// Test proxy status
 	os.Args = []string{"mops", "proxy", "status"}
 	err := Execute()
+	assert.NoError(t, err)
+
+	// Test proxy set custom address
+	os.Args = []string{"mops", "proxy", "set", "127.0.0.1:7890"}
+	err = Execute()
+	assert.NoError(t, err)
+
+	// Test proxy clear
+	os.Args = []string{"mops", "proxy", "clear"}
+	err = Execute()
 	assert.NoError(t, err)
 
 	// Test proxy invalid action
@@ -50,13 +78,72 @@ func TestCLIStatusSubcommand(t *testing.T) {
 	oldArgs := os.Args
 	defer func() { os.Args = oldArgs }()
 
-	// Run status non-watch mode
-	os.Args = []string{"mops", "status", "--client-port", "10899"}
+	apiPort := 10082
+	engine := NewEngine(Config{
+		APIPort:    apiPort,
+		ClientPort: 10899,
+		ServerPort: 10080,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
 
-	go func() {
-		time.Sleep(200 * time.Millisecond)
-	}()
+	// Run status non-watch mode
+	os.Args = []string{"mops", "status", "--api-port", "10082"}
 
 	err := Execute()
 	assert.NoError(t, err)
+}
+
+func TestCLIClientSubcommand(t *testing.T) {
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+
+	apiPort := 10082
+	engine := NewEngine(Config{
+		APIPort:    apiPort,
+		ClientPort: 10081,
+		ServerPort: 10080,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	// Test client status, off, on
+	os.Args = []string{"mops", "client", "status"}
+	assert.NoError(t, Execute())
+
+	os.Args = []string{"mops", "client", "off"}
+	assert.NoError(t, Execute())
+
+	os.Args = []string{"mops", "client", "on"}
+	assert.NoError(t, Execute())
+}
+
+func TestCLIServerSubcommand(t *testing.T) {
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+
+	apiPort := 10082
+	engine := NewEngine(Config{
+		APIPort:    apiPort,
+		ClientPort: 10081,
+		ServerPort: 10080,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	// Test server status, off, on
+	os.Args = []string{"mops", "server", "status"}
+	assert.NoError(t, Execute())
+
+	os.Args = []string{"mops", "server", "off"}
+	assert.NoError(t, Execute())
+
+	os.Args = []string{"mops", "server", "on"}
+	assert.NoError(t, Execute())
 }

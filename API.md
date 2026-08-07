@@ -79,6 +79,16 @@ RESTful API 返回的标准 JSON 结构体如下：
     "client_port": 10081,
     "server_port": 10080,
     "api_port": 10082,
+    "client_enabled": true,
+    "server_enabled": true,
+    "system_proxy": {
+      "enabled": true,
+      "proxy_server": "127.0.0.1:10081",
+      "http_proxy": "http://127.0.0.1:10081",
+      "https_proxy": "http://127.0.0.1:10081",
+      "all_proxy": "socks5://127.0.0.1:10081",
+      "no_proxy": "localhost,127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8,<local>"
+    },
     "speed_up": 12850.5,
     "speed_down": 524288.0,
     "bytes_up": 1048576,
@@ -98,6 +108,9 @@ RESTful API 返回的标准 JSON 结构体如下：
 | `client_port` | int | SOCKS5 代理监听端口 |
 | `server_port` | int | MOPS 节点中继服务 TCP 端口 |
 | `api_port` | int | 当前 HTTP RESTful API 服务端口 |
+| `client_enabled` | bool | 客户端 SOCKS5 代理监听是否开启 |
+| `server_enabled` | bool | 服务端 TCP 中继服务监听是否开启 |
+| `system_proxy` | object | 系统代理注册表与 4 个大写环境变量的当前值 |
 | `speed_up` | float64 | 实时上传速率（字节/秒 B/s） |
 | `speed_down` | float64 | 实时下载速率（字节/秒 B/s） |
 | `bytes_up` | uint64 | 累计上传总字节数 (Byte) |
@@ -107,7 +120,83 @@ RESTful API 返回的标准 JSON 结构体如下：
 
 ---
 
-## 3. 跨节点文件传输
+## 3. 开关与自定义设置 Windows 系统代理及环境变量
+
+查询或动态开启/关闭/自定义设置 Windows 系统注册表代理及大写环境变量 (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`)。
+
+- **请求路径**: `/api/v1/system-proxy`
+- **请求方法**:
+  - `GET`: 查询当前系统代理状态与环境变量
+  - `POST`: 开启/关闭/自定义代理 (`{"action": "set", "proxy_addr": "127.0.0.1:7890"}` 或 `{"action": "clear"}` 或 `{"action": "on"}`)
+
+### GET / POST 响应示例
+
+```json
+{
+  "code": 200,
+  "message": "system proxy updated successfully",
+  "data": {
+    "enabled": true,
+    "proxy_server": "127.0.0.1:7890",
+    "http_proxy": "http://127.0.0.1:7890",
+    "https_proxy": "http://127.0.0.1:7890",
+    "all_proxy": "socks5://127.0.0.1:7890",
+    "no_proxy": "localhost,127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8,<local>"
+  }
+}
+```
+
+---
+
+## 4. 动态开关与查询 SOCKS5 客户端代理
+
+查询或动态开启/停止 SOCKS5 代理监听服务。
+
+- **请求路径**: `/api/v1/client`
+- **请求方法**:
+  - `GET`: 查询客户端代理监听状态
+  - `POST`: 开启/关闭 SOCKS5 监听 (`{"enable": false}`)
+
+### POST 响应示例
+
+```json
+{
+  "code": 200,
+  "message": "client state updated successfully",
+  "data": {
+    "enabled": false,
+    "port": 10081
+  }
+}
+```
+
+---
+
+## 5. 动态开关与查询 TCP 服务端中继
+
+查询或动态开启/停止 TCP 服务端监听服务。
+
+- **请求路径**: `/api/v1/server`
+- **请求方法**:
+  - `GET`: 查询服务端中继监听状态
+  - `POST`: 开启/关闭 TCP 服务端监听 (`{"enable": true}`)
+
+### POST 响应示例
+
+```json
+{
+  "code": 200,
+  "message": "server state updated successfully",
+  "data": {
+    "enabled": true,
+    "port": 10080
+  }
+}
+```
+
+---
+
+## 6. 跨节点文件传输
 
 将本地指定路径的文件通过 MOPS 分布式 TCP 通道安全流式传输至目标节点，自动校验 SHA256 完整性及防覆盖重命名。
 

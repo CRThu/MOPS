@@ -195,12 +195,15 @@ func TestEndToEndMultiNodeLoadBalancing(t *testing.T) {
 	}
 
 	// Verify s1 is now automatically OFFLINE in Client's pool
-	nodes = engClient.GetNodes()
-	for _, n := range nodes {
-		if n.ID == "s1" {
-			assert.Equal(t, "OFFLINE", n.Status)
+	require.Eventually(t, func() bool {
+		nodes := engClient.GetNodes()
+		for _, n := range nodes {
+			if n.ID == "s1" {
+				return n.Status == "OFFLINE"
+			}
 		}
-	}
+		return false
+	}, 1*time.Second, 20*time.Millisecond)
 }
 
 func TestEndToEndLargeDataStream(t *testing.T) {
