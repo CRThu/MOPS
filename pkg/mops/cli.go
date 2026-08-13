@@ -266,8 +266,9 @@ func Execute() error {
 	var hostname string
 
 	rootCmd := &cobra.Command{
-		Use:   "mops",
-		Short: "MOPS Multi-node Outbound Proxy System",
+		Use:     "mops",
+		Short:   "MOPS Multi-node Outbound Proxy System",
+		Version: "1.4.0",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := Config{
 				ServerPort:  serverPort,
