@@ -39,6 +39,7 @@ type StatusData struct {
 	TotalNodes    int             `json:"total_nodes"`
 	OnlineNodes   int             `json:"online_nodes"`
 	DownloadDir   string          `json:"download_dir"`
+	Advertise     string          `json:"advertise"`
 }
 
 // APIServer manages the RESTful HTTP API server.
@@ -77,10 +78,20 @@ func (a *APIServer) Start(port int, listenAddr string) error {
 	mux.HandleFunc("/api/v1/client", a.handleClientControl)
 	mux.HandleFunc("/api/v1/server", a.handleServerControl)
 	mux.HandleFunc("/api/v1/config", a.handleConfig)
+	mux.HandleFunc("/api/v1/interfaces", a.handleInterfaces)
 	mux.HandleFunc("/api/v1/service", a.handleServiceControl)
 
 	a.server = &http.Server{
-		Handler: mux,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			mux.ServeHTTP(w, r)
+		}),
 	}
 
 	go func() {
@@ -154,6 +165,7 @@ func (a *APIServer) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		TotalNodes:    len(nodes),
 		OnlineNodes:   onlineCount,
 		DownloadDir:   a.engine.GetDownloadDir(),
+		Advertise:     ResolveAdvertiseIP(a.engine.GetAdvertise()),
 	}
 
 	writeJSON(w, http.StatusOK, APIResponse{
@@ -418,6 +430,7 @@ func (a *APIServer) handleServerControl(w http.ResponseWriter, r *http.Request) 
 func (a *APIServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		adv := ResolveAdvertiseIP(a.engine.GetAdvertise())
 		writeJSON(w, http.StatusOK, APIResponse{
 			Code:    http.StatusOK,
 			Message: "success",
@@ -428,11 +441,13 @@ func (a *APIServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 				"api_port":     a.engine.cfg.APIPort,
 				"strategy":     a.engine.cfg.Strategy,
 				"listen_addr":  a.engine.cfg.ListenAddr,
+				"advertise":    adv,
 			},
 		})
 	case http.MethodPost:
 		var req struct {
-			DownloadDir string `json:"download_dir"`
+			DownloadDir string  `json:"download_dir"`
+			Advertise   *string `json:"advertise"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, APIResponse{
@@ -452,11 +467,24 @@ func (a *APIServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if req.Advertise != nil {
+			if err := a.engine.SetAdvertise(*req.Advertise); err != nil {
+				writeJSON(w, http.StatusInternalServerError, APIResponse{
+					Code:    http.StatusInternalServerError,
+					Message: fmt.Sprintf("failed to update advertise address: %v", err),
+				})
+				return
+			}
+		}
+
+		adv := ResolveAdvertiseIP(a.engine.GetAdvertise())
+
 		writeJSON(w, http.StatusOK, APIResponse{
 			Code:    http.StatusOK,
 			Message: "config updated successfully",
 			Data: map[string]interface{}{
 				"download_dir": a.engine.GetDownloadDir(),
+				"advertise":    adv,
 			},
 		})
 	default:
@@ -518,17 +546,18 @@ func (a *APIServer) handleServiceControl(w http.ResponseWriter, r *http.Request)
 		}
 
 		actionErr := ControlService(actionLower, a.engine.cfg)
+		svcStatus, installed := GetServiceStatus()
 		if actionErr != nil {
-			writeJSON(w, http.StatusInternalServerError, APIResponse{
-				Code:    http.StatusInternalServerError,
-				Message: fmt.Sprintf("failed to perform service action %s: %v", req.Action, actionErr),
+			writeJSON(w, http.StatusOK, APIResponse{
+				Code:    http.StatusBadRequest,
+				Message: fmt.Sprintf("操作未完成: %v (系统服务状态: %s)", actionErr, svcStatus),
 			})
 			return
 		}
 
 		writeJSON(w, http.StatusOK, APIResponse{
 			Code:    http.StatusOK,
-			Message: fmt.Sprintf("service action %s executed successfully", req.Action),
+			Message: fmt.Sprintf("系统服务操作成功 (服务真实状态: %s, 已注册: %v)", svcStatus, installed),
 		})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{
@@ -538,7 +567,28 @@ func (a *APIServer) handleServiceControl(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+func (a *APIServer) handleInterfaces(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{
+			Code:    http.StatusMethodNotAllowed,
+			Message: "Method Not Allowed",
+		})
+		return
+	}
+
+	ifaces := GetNetworkInterfaces()
+	writeJSON(w, http.StatusOK, APIResponse{
+		Code:    http.StatusOK,
+		Message: "success",
+		Data:    ifaces,
+		Total:   len(ifaces),
+	})
+}
+
 func writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(data)

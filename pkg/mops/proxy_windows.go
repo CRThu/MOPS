@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -34,7 +36,6 @@ const (
 var proxyEnvKeys = []string{
 	"HTTP_PROXY",
 	"HTTPS_PROXY",
-	"ALL_PROXY",
 	"NO_PROXY",
 }
 
@@ -53,16 +54,7 @@ func SetSystemProxy(enable bool, proxyAddr string) error {
 	defer envKey.Close()
 
 	if enable {
-		if proxyAddr == "" {
-			proxyAddr = "127.0.0.1:10081"
-		}
-		host, portStr, err := net.SplitHostPort(proxyAddr)
-		if err != nil {
-			host = "127.0.0.1"
-			portStr = "10081"
-		}
-
-		cleanAddr := fmt.Sprintf("%s:%s", host, portStr)
+		cleanAddr := CleanProxyAddr(proxyAddr)
 		if err := key.SetDWordValue("ProxyEnable", 1); err != nil {
 			return fmt.Errorf("failed to set ProxyEnable=1: %w", err)
 		}
@@ -73,13 +65,11 @@ func SetSystemProxy(enable bool, proxyAddr string) error {
 
 		// 1. Set uppercase environment variables in HKCU\Environment
 		httpVal := fmt.Sprintf("http://%s", cleanAddr)
-		socksVal := fmt.Sprintf("socks5://%s", cleanAddr)
 		noProxyVal := "localhost,127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8,<local>"
 
 		envMap := map[string]string{
 			"HTTP_PROXY":  httpVal,
 			"HTTPS_PROXY": httpVal,
-			"ALL_PROXY":   socksVal,
 			"NO_PROXY":    noProxyVal,
 		}
 
@@ -131,7 +121,6 @@ type SystemProxyInfo struct {
 	ProxyServer string `json:"proxy_server"`
 	HttpProxy   string `json:"http_proxy"`
 	HttpsProxy  string `json:"https_proxy"`
-	AllProxy    string `json:"all_proxy"`
 	NoProxy     string `json:"no_proxy"`
 }
 
@@ -143,7 +132,6 @@ func GetSystemProxyInfo() (SystemProxyInfo, error) {
 		ProxyServer: server,
 		HttpProxy:   os.Getenv("HTTP_PROXY"),
 		HttpsProxy:  os.Getenv("HTTPS_PROXY"),
-		AllProxy:    os.Getenv("ALL_PROXY"),
 		NoProxy:     os.Getenv("NO_PROXY"),
 	}
 
@@ -155,9 +143,6 @@ func GetSystemProxyInfo() (SystemProxyInfo, error) {
 		}
 		if info.HttpsProxy == "" {
 			info.HttpsProxy, _, _ = envKey.GetStringValue("HTTPS_PROXY")
-		}
-		if info.AllProxy == "" {
-			info.AllProxy, _, _ = envKey.GetStringValue("ALL_PROXY")
 		}
 		if info.NoProxy == "" {
 			info.NoProxy, _, _ = envKey.GetStringValue("NO_PROXY")
@@ -209,10 +194,7 @@ func RestoreSystemProxyInfo(info SystemProxyInfo) error {
 			_ = envKey.SetStringValue("HTTPS_PROXY", info.HttpsProxy)
 			_ = os.Setenv("HTTPS_PROXY", info.HttpsProxy)
 		}
-		if info.AllProxy != "" {
-			_ = envKey.SetStringValue("ALL_PROXY", info.AllProxy)
-			_ = os.Setenv("ALL_PROXY", info.AllProxy)
-		}
+
 		if info.NoProxy != "" {
 			_ = envKey.SetStringValue("NO_PROXY", info.NoProxy)
 			_ = os.Setenv("NO_PROXY", info.NoProxy)
@@ -220,4 +202,37 @@ func RestoreSystemProxyInfo(info SystemProxyInfo) error {
 	}
 	notifyEnvironmentChange()
 	return nil
+}
+
+// CleanProxyAddr normalizes user proxy input (e.g. "7897", "127.0.0.1:7897", "http://127.0.0.1:7897/", "127.0.0.1").
+func CleanProxyAddr(proxyAddr string) string {
+	proxyAddr = strings.TrimSpace(proxyAddr)
+	if proxyAddr == "" {
+		return "127.0.0.1:10081"
+	}
+	if idx := strings.Index(proxyAddr, "://"); idx != -1 {
+		proxyAddr = proxyAddr[idx+3:]
+	}
+	proxyAddr = strings.TrimSuffix(proxyAddr, "/")
+
+	if _, err := strconv.Atoi(proxyAddr); err == nil {
+		return fmt.Sprintf("127.0.0.1:%s", proxyAddr)
+	}
+
+	if net.ParseIP(proxyAddr) != nil {
+		return fmt.Sprintf("%s:10081", proxyAddr)
+	}
+
+	host, portStr, err := net.SplitHostPort(proxyAddr)
+	if err != nil {
+		if !strings.Contains(proxyAddr, ":") {
+			return fmt.Sprintf("127.0.0.1:%s", proxyAddr)
+		}
+		return "127.0.0.1:10081"
+	}
+
+	if host == "" || host == "0.0.0.0" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("%s:%s", host, portStr)
 }

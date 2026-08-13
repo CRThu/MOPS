@@ -74,7 +74,16 @@ func IsAdministrator() bool {
 // ControlService handles service install, uninstall, start, stop.
 func ControlService(action string, cfg Config) error {
 	if (action == "install" || action == "uninstall" || action == "start" || action == "stop" || action == "update") && !IsAdministrator() {
-		return fmt.Errorf("administrative privileges required for service operation '%s'. Please run terminal as Administrator or accept UAC prompt", action)
+		exePath, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("需要管理员权限执行 '%s' 操作", action)
+		}
+		psCmd := fmt.Sprintf("Start-Process '%s' -ArgumentList 'service %s' -Verb RunAs -Wait", exePath, action)
+		cmd := exec.Command("powershell", "-Command", psCmd)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("提权失败: 需要管理员权限或取消了 UAC 提权")
+		}
+		return nil
 	}
 
 	svcConfig := &service.Config{
@@ -236,26 +245,23 @@ func setupFirewallRules() {
 
 // GetServiceStatus returns status string and whether service is installed.
 func GetServiceStatus() (string, bool) {
-	svcConfig := &service.Config{
-		Name:        "mops",
-		DisplayName: "MOPS Proxy Service",
-		Description: "Multi-node Outbound Proxy System Service for Windows",
-	}
-	prg := &program{}
-	s, err := service.New(prg, svcConfig)
-	if err != nil {
-		return "Unknown", false
-	}
-	status, err := s.Status()
+	cmd := exec.Command("cmd", "/c", "sc query mops")
+	out, err := cmd.Output()
 	if err != nil {
 		return "NotInstalled", false
 	}
-	switch status {
-	case service.StatusRunning:
+	outStr := string(out)
+	if strings.Contains(outStr, "RUNNING") {
 		return "Running", true
-	case service.StatusStopped:
+	}
+	if strings.Contains(outStr, "STOPPED") {
 		return "Stopped", true
-	default:
+	}
+	if strings.Contains(outStr, "PAUSED") {
+		return "Paused", true
+	}
+	if strings.Contains(outStr, "STATE") {
 		return "Installed", true
 	}
+	return "NotInstalled", false
 }

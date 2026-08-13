@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -166,13 +167,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.running = true
 
 	// Add self node
-	selfIP := e.cfg.Advertise
-	if selfIP == "" || selfIP == "127.0.0.1" {
-		if autoIP, err := GetOutboundIP(); err == nil && autoIP != "" {
-			selfIP = autoIP
-			e.cfg.Advertise = autoIP
-		}
-	}
+	selfIP := ResolveAdvertiseIP(e.cfg.Advertise)
 	selfID := fmt.Sprintf("%s@%s:%d", e.cfg.Hostname, selfIP, e.cfg.ServerPort)
 	selfNode := &Node{
 		ID:       selfID,
@@ -403,6 +398,17 @@ func (e *Engine) GetNodes() []*Node {
 		nodeCopy := *n
 		res = append(res, &nodeCopy)
 	}
+
+	sort.Slice(res, func(i, j int) bool {
+		if res[i].IsMe != res[j].IsMe {
+			return res[i].IsMe
+		}
+		if res[i].IP != res[j].IP {
+			return res[i].IP < res[j].IP
+		}
+		return res[i].Port < res[j].Port
+	})
+
 	return res
 }
 
@@ -1002,3 +1008,21 @@ func (e *Engine) speedLoop(ctx context.Context) {
 		}
 	}
 }
+
+// GetAdvertise returns the current configured advertise IP.
+func (e *Engine) GetAdvertise() string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.cfg.Advertise
+}
+
+// SetAdvertise updates the broadcast advertise IP and saves persistent config.
+func (e *Engine) SetAdvertise(ip string) error {
+	e.mu.Lock()
+	e.cfg.Advertise = ip
+	cfgCopy := e.cfg
+	e.mu.Unlock()
+
+	return SavePersistentConfig(cfgCopy)
+}
+

@@ -42,6 +42,46 @@ func TestGetOutboundIP(t *testing.T) {
 	}
 }
 
+func TestGetNetworkInterfaces(t *testing.T) {
+	ifaces := GetNetworkInterfaces()
+	assert.NotNil(t, ifaces)
+	// On systems with active network interfaces, ifaces will contain items
+	for _, iface := range ifaces {
+		assert.NotEmpty(t, iface.Name)
+		assert.NotEmpty(t, iface.IP)
+	}
+}
+
+func TestIsIPValidOnLocalInterfacesAndStaleIPFallback(t *testing.T) {
+	// Stale / fake IP should be invalid
+	assert.False(t, IsIPValidOnLocalInterfaces("203.0.113.199"))
+	assert.False(t, IsIPValidOnLocalInterfaces(""))
+	assert.False(t, IsIPValidOnLocalInterfaces("127.0.0.1"))
+
+	// Real outbound IP should be valid
+	if realIP, err := GetOutboundIP(); err == nil && realIP != "" {
+		assert.True(t, IsIPValidOnLocalInterfaces(realIP))
+	}
+}
+
+func TestResolveAdvertiseIPByInterfaceName(t *testing.T) {
+	ifaces := GetNetworkInterfaces()
+	if len(ifaces) > 0 {
+		firstIface := ifaces[0]
+		// Resolving by interface name should return the interface's current IP
+		resolvedIP := ResolveAdvertiseIP(firstIface.Name)
+		assert.Equal(t, firstIface.IP, resolvedIP)
+	}
+
+	// Invalid interface name should fall back to outbound IP
+	fallbackIP := ResolveAdvertiseIP("NonExistentIface999")
+	assert.NotEmpty(t, fallbackIP)
+	assert.NotEqual(t, "127.0.0.1", fallbackIP)
+}
+
+
+
+
 func TestDiscoveryLifecycle(t *testing.T) {
 	eng := NewEngine(Config{
 		ServerPort: getFreePort(),

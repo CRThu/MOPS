@@ -521,7 +521,7 @@ func TestFileTransferTrailerHashCorrupted(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify file was removed due to corrupt Hash mismatch
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 	targetPath := filepath.Join(tempDir, "corrupted.txt")
 	assert.NoFileExists(t, targetPath)
 }

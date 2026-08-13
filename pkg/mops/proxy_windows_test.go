@@ -35,7 +35,6 @@ func TestSystemProxyToggle(t *testing.T) {
 	assert.True(t, info.Enabled)
 	assert.Equal(t, "http://127.0.0.1:10081", os.Getenv("HTTP_PROXY"))
 	assert.Equal(t, "http://127.0.0.1:10081", os.Getenv("HTTPS_PROXY"))
-	assert.Equal(t, "socks5://127.0.0.1:10081", os.Getenv("ALL_PROXY"))
 	assert.NotEmpty(t, os.Getenv("NO_PROXY"))
 
 	// Test disable
@@ -49,7 +48,6 @@ func TestSystemProxyToggle(t *testing.T) {
 	// Verify environment variables were cleared
 	assert.Empty(t, os.Getenv("HTTP_PROXY"))
 	assert.Empty(t, os.Getenv("HTTPS_PROXY"))
-	assert.Empty(t, os.Getenv("ALL_PROXY"))
 }
 
 func TestSetSystemProxyInvalidAddrFallback(t *testing.T) {
@@ -67,4 +65,13 @@ func TestSetSystemProxyInvalidAddrFallback(t *testing.T) {
 	assert.True(t, info.Enabled)
 	// Should fallback to default 127.0.0.1:10081
 	assert.Equal(t, "127.0.0.1:10081", info.ProxyServer)
+}
+
+func TestCleanProxyAddr(t *testing.T) {
+	assert.Equal(t, "127.0.0.1:7897", CleanProxyAddr("7897"))
+	assert.Equal(t, "127.0.0.1:7897", CleanProxyAddr(" 7897 "))
+	assert.Equal(t, "127.0.0.1:7897", CleanProxyAddr("127.0.0.1:7897"))
+	assert.Equal(t, "127.0.0.1:7897", CleanProxyAddr("http://127.0.0.1:7897/"))
+	assert.Equal(t, "192.168.1.5:8080", CleanProxyAddr("192.168.1.5:8080"))
+	assert.Equal(t, "127.0.0.1:10081", CleanProxyAddr(""))
 }

@@ -41,13 +41,7 @@ func (d *Discovery) Start(ctx context.Context) error {
 	// 1. Register mDNS Service
 	if d.engine.cfg.ServerPort > 0 {
 		var ips []string
-		selfIP := d.engine.cfg.Advertise
-		if selfIP == "" || selfIP == "127.0.0.1" {
-			if autoIP, err := GetOutboundIP(); err == nil && autoIP != "" {
-				selfIP = autoIP
-				d.engine.cfg.Advertise = autoIP
-			}
-		}
+		selfIP := ResolveAdvertiseIP(d.engine.cfg.Advertise)
 		if selfIP != "" && selfIP != "127.0.0.1" {
 			ips = append(ips, selfIP)
 		}
@@ -211,10 +205,7 @@ func (d *Discovery) handleEntries(ctx context.Context, entries <-chan *zeroconf.
 			}
 			node := parseServiceEntry(entry)
 			if node != nil {
-				selfIP := d.engine.cfg.Advertise
-				if selfIP == "" {
-					selfIP, _ = GetOutboundIP()
-				}
+				selfIP := ResolveAdvertiseIP(d.engine.cfg.Advertise)
 				isSelf := (node.IP == selfIP || node.IP == "127.0.0.1") && node.Port == d.engine.cfg.ServerPort
 				if !isSelf {
 					fmt.Printf("[mDNS Auto-Discovered Node] Hostname: %s, IP: %s, Port: %d\n", node.Hostname, node.IP, node.Port)
@@ -377,3 +368,92 @@ func GetOutboundIP() (string, error) {
 func isPrivate172(ip net.IP) bool {
 	return ip[0] == 172 && ip[1] >= 16 && ip[1] <= 31
 }
+
+// NetworkInterface defines metadata for a local network interface.
+type NetworkInterface struct {
+	Name      string `json:"name"`
+	IP        string `json:"ip"`
+	IsVirtual bool   `json:"is_virtual"`
+}
+
+// GetNetworkInterfaces returns a list of active local IPv4 network interfaces.
+func GetNetworkInterfaces() []NetworkInterface {
+	var result []NetworkInterface
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return result
+	}
+
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip4 := ipNet.IP.To4()
+			if ip4 == nil || ip4.IsLoopback() || ip4.IsMulticast() || ip4.IsUnspecified() {
+				continue
+			}
+			result = append(result, NetworkInterface{
+				Name:      iface.Name,
+				IP:        ip4.String(),
+				IsVirtual: isVirtualInterface(iface.Name),
+			})
+		}
+	}
+	return result
+}
+
+// IsIPValidOnLocalInterfaces checks if targetIP exists on current active local network interfaces.
+func IsIPValidOnLocalInterfaces(targetIP string) bool {
+	if targetIP == "" || targetIP == "127.0.0.1" {
+		return false
+	}
+	for _, iface := range GetNetworkInterfaces() {
+		if iface.IP == targetIP {
+			return true
+		}
+	}
+	return false
+}
+
+// GetIPByInterfaceName returns current IPv4 address of network interface by name (case-insensitive).
+func GetIPByInterfaceName(ifaceName string) string {
+	if ifaceName == "" {
+		return ""
+	}
+	for _, iface := range GetNetworkInterfaces() {
+		if strings.EqualFold(iface.Name, ifaceName) {
+			return iface.IP
+		}
+	}
+	return ""
+}
+
+// ResolveAdvertiseIP resolves configured Advertise value into active IPv4 address.
+// Supports:
+// 1. Interface name (e.g. "Wi-Fi", "以太网", "eth0") -> returns current dynamic IP of interface
+// 2. Exact valid IPv4 address (e.g. "192.168.1.100") -> returns if valid on local interfaces
+// 3. Empty or stale -> falls back to auto-detected outbound IP
+func ResolveAdvertiseIP(adv string) string {
+	if adv == "" || adv == "127.0.0.1" {
+		ip, _ := GetOutboundIP()
+		return ip
+	}
+	if ip := GetIPByInterfaceName(adv); ip != "" {
+		return ip
+	}
+	if IsIPValidOnLocalInterfaces(adv) {
+		return adv
+	}
+	ip, _ := GetOutboundIP()
+	return ip
+}
+

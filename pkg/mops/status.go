@@ -58,8 +58,8 @@ func RenderStatusWithProxyInfo(nodes []*Node, strategy string, clientPort int, s
 	if proxyInfo.Enabled {
 		proxyStatusStr = fmt.Sprintf("ON (%s)", proxyInfo.ProxyServer)
 	}
-	buf.WriteString(fmt.Sprintf("System Proxy: %s | HTTP_PROXY: %s | ALL_PROXY: %s\n\n",
-		proxyStatusStr, proxyInfo.HttpProxy, proxyInfo.AllProxy))
+	buf.WriteString(fmt.Sprintf("System Proxy: %s | HTTP_PROXY: %s\n\n",
+		proxyStatusStr, proxyInfo.HttpProxy))
 
 	tw := tabwriter.NewWriter(&buf, 0, 0, 3, ' ', 0)
 	fmt.Fprintln(tw, "ID\tHOSTNAME\tIP\tPORT\tROLE\tSTATUS\tACTIVE CONNS\tTRAFFIC (UP / DOWN)")

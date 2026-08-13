@@ -112,7 +112,6 @@ func controlSystemProxyViaAPI(apiPort int, action string, customAddr string) err
 		}
 		fmt.Printf("HTTP_PROXY:  %s\n", wrapper.Data.HttpProxy)
 		fmt.Printf("HTTPS_PROXY: %s\n", wrapper.Data.HttpsProxy)
-		fmt.Printf("ALL_PROXY:   %s\n", wrapper.Data.AllProxy)
 		fmt.Printf("NO_PROXY:    %s\n", wrapper.Data.NoProxy)
 		return nil
 	}

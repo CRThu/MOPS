@@ -12,16 +12,20 @@
 - **Windows 原生系统服务** — 支持无黑框静默运行 (`Services.msc`)，开机常驻守护
 - **Windows 注册表系统代理** — 一键开启/关闭/查看 Windows 系统全局代理
 - **Tailscale 风格 CLI 视图** — `mops status` / `mops status -w` 在终端中以美观表格实时显示集群节点与总网速
-- **单一可执行文件** — 解压即用，无 Python 运行库与 Web 依赖
+- **Tauri 2.0 高颜值 GUI 客户端** — 基于 Svelte 5 + TailwindCSS 构建 Windows 右下角托盘 Popover 小窗，分层架构封装，零改动 Go 内核
 
 ## 极速构建
 
 ```powershell
-# 使用 PowerShell 脚本极速编译
+# 1. 使用 PowerShell 脚本极速编译 Go 后端
 .\build.ps1
 
-# 或使用标准 go build
-go build -o mops.exe ./cmd/mops
+# 2. 运行 GUI 桌面端与测试套件 (需 Node/Bun 环境)
+cd gui
+bun install         # 安装前端依赖
+bun run test        # 运行 Vitest 单元与集成测试 (unit & integration)
+bun run test:e2e    # 运行 Playwright 端到端 E2E 测试
+bun tauri dev       # 启动 Tauri 2.0 桌面开发小窗
 ```
 
 ## CLI 命令说明
@@ -98,4 +102,5 @@ curl.exe -x socks5://127.0.0.1:10081 https://ifconfig.me
 ## 许可证
 
 [Apache License 2.0](LICENSE)
+
 

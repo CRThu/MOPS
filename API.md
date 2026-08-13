@@ -86,7 +86,6 @@ RESTful API 返回的标准 JSON 结构体如下：
       "proxy_server": "127.0.0.1:10081",
       "http_proxy": "http://127.0.0.1:10081",
       "https_proxy": "http://127.0.0.1:10081",
-      "all_proxy": "socks5://127.0.0.1:10081",
       "no_proxy": "localhost,127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8,<local>"
     },
     "speed_up": 12850.5,
@@ -110,7 +109,7 @@ RESTful API 返回的标准 JSON 结构体如下：
 | `api_port` | int | 当前 HTTP RESTful API 服务端口 |
 | `client_enabled` | bool | 客户端 SOCKS5 代理监听是否开启 |
 | `server_enabled` | bool | 服务端 TCP 中继服务监听是否开启 |
-| `system_proxy` | object | 系统代理注册表与 4 个大写环境变量的当前值 |
+| `system_proxy` | object | 系统代理注册表与 3 个大写环境变量的当前值 |
 | `speed_up` | float64 | 实时上传速率（字节/秒 B/s） |
 | `speed_down` | float64 | 实时下载速率（字节/秒 B/s） |
 | `bytes_up` | uint64 | 累计上传总字节数 (Byte) |
@@ -122,7 +121,7 @@ RESTful API 返回的标准 JSON 结构体如下：
 
 ## 3. 开关与自定义设置 Windows 系统代理及环境变量
 
-查询或动态开启/关闭/自定义设置 Windows 系统注册表代理及大写环境变量 (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`)。
+查询或动态开启/关闭/自定义设置 Windows 系统注册表代理及大写环境变量 (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`)。
 
 - **请求路径**: `/api/v1/system-proxy`
 - **请求方法**:
@@ -140,7 +139,6 @@ RESTful API 返回的标准 JSON 结构体如下：
     "proxy_server": "127.0.0.1:7890",
     "http_proxy": "http://127.0.0.1:7890",
     "https_proxy": "http://127.0.0.1:7890",
-    "all_proxy": "socks5://127.0.0.1:7890",
     "no_proxy": "localhost,127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8,<local>"
   }
 }

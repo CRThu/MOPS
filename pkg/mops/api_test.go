@@ -506,16 +506,26 @@ func TestAPIConfigProgressAndService(t *testing.T) {
 	resp.Body.Close()
 	assert.Equal(t, 200, cfgResp.Code)
 
-	// 2. POST /api/v1/config (Update download_dir)
+	// 2. POST /api/v1/config (Update download_dir and advertise)
 	newDir := filepath.Join(os.TempDir(), "mops_api_download_test")
 	defer os.RemoveAll(newDir)
 
-	postBody, _ := json.Marshal(map[string]string{"download_dir": newDir})
+	postBody, _ := json.Marshal(map[string]string{"download_dir": newDir, "advertise": "192.168.1.222"})
 	resp, err = client.Post(fmt.Sprintf("http://127.0.0.1:%d/api/v1/config", apiPort), "application/json", bytes.NewBuffer(postBody))
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	resp.Body.Close()
 	assert.Equal(t, newDir, engine.GetDownloadDir())
+	assert.Equal(t, "192.168.1.222", engine.GetAdvertise())
+
+	// 2b. GET /api/v1/interfaces
+	resp, err = client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/interfaces", apiPort))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	var ifacesResp APIResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&ifacesResp))
+	resp.Body.Close()
+	assert.Equal(t, 200, ifacesResp.Code)
 
 	// 3. GET /api/v1/files/progress
 	resp, err = client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/files/progress", apiPort))

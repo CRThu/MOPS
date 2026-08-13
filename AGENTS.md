@@ -33,6 +33,12 @@ App → Client SOCKS5(:10081) → mDNS 局域网自动发现 → Server(:10080) 
 | `pkg/mops/cli_test.go` | [单元测试] CLI 命令行树与交互测试 |
 | `pkg/mops/exe_integration_test.go` | [集成测试] `mops.exe` 二进制黑盒集成测试 |
 | `pkg/mops/integration_test.go` | [集成测试] 端到端多节点代理与负载均衡测试 |
+| `gui/src/lib/api.ts` & `tauri.ts` | [GUI 基础设施层] REST API Client 与 Tauri Native 适配 |
+| `gui/src/lib/store.ts` | [GUI 状态/业务逻辑层] 集中式响应状态机与 1.5s 轮询守护 |
+| `gui/src/components/` & `App.svelte` | [GUI 视图层] Header, NodeList, SettingsModal, Toast 视图 |
+| `gui/tests/unit_infrastructure.test.ts` | [GUI 单元测试] 基础设施层与 API client 解析测试 |
+| `gui/tests/integration_store.test.ts` | [GUI 集成测试] 状态层轮询与业务响应测试 |
+| `gui/tests/e2e.spec.ts` | [GUI E2E 测试] Playwright 端到端用户交互测试 |
 
 ## CLI 结构
 
@@ -72,6 +78,14 @@ MOPS/
 │       ├── status.go        # Tailscale 风格表格渲染
 │       ├── status_test.go   # 视图渲染单元测试
 │       └── integration_test.go # 端到端多节点集成测试
+├── gui/                     # Tauri 2.0 + Svelte 5 桌面客户端 UI (分层架构)
+│   ├── src/
+│   │   ├── lib/             # 基础设施层 (api.ts, tauri.ts) 与 业务逻辑层 (store.ts)
+│   │   ├── components/      # 视图层组件 (Header, NodeList, SettingsModal, Toast)
+│   │   └── App.svelte       # 根视图容器
+│   ├── tests/               # Vitest & Playwright GUI 测试套件
+│   ├── package.json
+│   └── src-tauri/           # Rust Tauri 2.0 托盘与 Popover 配置
 ├── go.mod                   # Go 模块文件
 ├── go.sum                   # Go 依赖锁文件
 ├── build.ps1                # Windows 构建脚本
@@ -82,8 +96,8 @@ MOPS/
 
 ## 开发与构建
 
-- **构建命令**：`go build -o bin/mops.exe ./cmd/mops` 或 `.\build.ps1`
-- **全量测试命令（推荐，在 bin/ 目录下生成并运行测试）**：
+- **Go 后端构建命令**：`go build -o bin/mops.exe ./cmd/mops` 或 `.\build.ps1`
+- **Go 全量测试命令（推荐，在 bin/ 目录下生成并运行测试）**：
   ```powershell
   # 编译测试二进制至 bin/mops.test.exe 并运行（避免在 system Temp 目录运行）
   go test -c -o bin/mops.test.exe ./pkg/mops
@@ -93,7 +107,16 @@ MOPS/
   ```powershell
   .\build.ps1
   ```
+- **GUI 自动化测试与运行命令**：
+  ```powershell
+  cd gui
+  bun install
+  bun run test      # 执行单元测试 (unit_infrastructure.test.ts) 与集成测试 (integration_store.test.ts)
+  bun run test:e2e  # 执行 Playwright E2E 端到端测试 (e2e.spec.ts)
+  bun tauri dev     # 开启 Tauri 本地桌面开发与热重载
+  ```
 - **输出与测试规范**：
   - 规定所有构建产物（`bin/mops.exe`）及测试可执行程序（`bin/mops.test.exe`）**必须统一在项目根目录 `bin/` 目录下编译生成与运行**，严禁使用系统临时目录（`%TEMP%` 或 `/tmp`）。
   - 黑盒集成测试（`exe_integration_test.go`）会自动编译/使用 `bin/mops.exe` 进行黑盒测试。
+
 

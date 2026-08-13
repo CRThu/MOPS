@@ -12,6 +12,15 @@ coverage.out
 coverage/
 .coverage
 
+# GUI Node.js & Tauri dependencies and builds
+node_modules/
+gui/node_modules/
+gui/dist/
+gui/src-tauri/target/
+gui/.svelte-kit/
+test-results/
+playwright-report/
+
 # Logs
 *.log
 logs/
