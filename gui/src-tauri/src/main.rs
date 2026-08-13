@@ -51,7 +51,28 @@ fn resolve_mops_executable() -> Option<PathBuf> {
             return Some(mops_direct);
         }
     }
-    None
+    extract_embedded_mops()
+}
+
+fn extract_embedded_mops() -> Option<PathBuf> {
+    let temp_dir = std::env::temp_dir().join("MOPS");
+    if std::fs::create_dir_all(&temp_dir).is_err() {
+        return None;
+    }
+    let extracted_path = temp_dir.join("mops.exe");
+
+    const EMBEDDED_MOPS: &[u8] = include_bytes!("../../../bin/mops.exe");
+    let should_write = match std::fs::metadata(&extracted_path) {
+        Ok(meta) => meta.len() != EMBEDDED_MOPS.len() as u64,
+        Err(_) => true,
+    };
+
+    if should_write {
+        if std::fs::write(&extracted_path, EMBEDDED_MOPS).is_err() {
+            return None;
+        }
+    }
+    Some(extracted_path)
 }
 
 fn start_daemon_if_needed(app_handle: &tauri::AppHandle) {

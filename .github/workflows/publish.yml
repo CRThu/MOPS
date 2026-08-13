@@ -21,13 +21,21 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Build Executable & Run Tests
-        run: powershell -ExecutionPolicy Bypass -File .\build.ps1
+        run: pwsh -ExecutionPolicy Bypass -File .\build.ps1
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: bin/mops.exe
+          files: |
+            bin/MOPS Desktop.exe
+            bin/mops.exe
           generate_release_notes: true
           draft: false
           prerelease: false

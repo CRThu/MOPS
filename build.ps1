@@ -32,7 +32,8 @@ Write-Host ("Go Backend & Integration Tests PASSED! Output: bin/mops.exe ({0:N2}
 
 Write-Host "Building Tauri GUI Desktop Widget (mops-gui.exe)..." -ForegroundColor Green
 Push-Location gui
-bun tauri build
+bun install
+bun tauri build --no-bundle
 $guiBuildStatus = $LASTEXITCODE
 Pop-Location
 
@@ -41,18 +42,11 @@ if ($guiBuildStatus -ne 0) {
     exit 1
 }
 
-$portableDir = "bin/MOPS-Portable"
-if (-not (Test-Path $portableDir)) {
-    New-Item -ItemType Directory -Path $portableDir | Out-Null
-}
-
-Copy-Item -Path "bin/mops.exe" -Destination "$portableDir/mops.exe" -Force
-Copy-Item -Path "gui/src-tauri/target/release/mops-gui.exe" -Destination "$portableDir/MOPS Desktop.exe" -Force
+Copy-Item -Path "gui/src-tauri/target/release/mops-gui.exe" -Destination "bin/MOPS Desktop.exe" -Force
 
 Write-Host "==========================================================" -ForegroundColor Green
-Write-Host "MOPS Desktop Portable Build Succeeded!" -ForegroundColor Green
-Write-Host "Portable package created at: $portableDir/" -ForegroundColor Yellow
-Write-Host "  ├── MOPS Desktop.exe  (Desktop Widget UI)" -ForegroundColor Cyan
-Write-Host "  └── mops.exe          (Go Proxy Backend)" -ForegroundColor Cyan
+Write-Host "MOPS Build Succeeded! All artifacts ready in bin/:" -ForegroundColor Green
+Write-Host "  |-- bin/MOPS Desktop.exe  (Single-File Desktop GUI)" -ForegroundColor Cyan
+Write-Host "  \-- bin/mops.exe          (Standalone CLI & System Service)" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Green
 
