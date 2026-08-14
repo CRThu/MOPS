@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -595,8 +596,7 @@ func (e *Engine) handleIncomingFile(reader io.Reader, hdr Header, meNode *Node) 
 		saveDir = "./downloads"
 	}
 
-	filePath := getUniqueFilePath(saveDir, hdr.FileName)
-	outFile, err := os.Create(filePath)
+	outFile, filePath, err := createUniqueFile(saveDir, hdr.FileName)
 	if err != nil {
 		e.updateTransferProgress(hdr.FileName, 0, hdr.FileSize, "FAILED", "RECEIVE")
 		return
@@ -646,11 +646,13 @@ func (e *Engine) handleIncomingFile(reader io.Reader, hdr Header, meNode *Node) 
 	e.updateTransferProgress(hdr.FileName, hdr.FileSize, hdr.FileSize, "COMPLETED", "RECEIVE")
 }
 
-func getUniqueFilePath(dir, fileName string) string {
+func createUniqueFile(dir, fileName string) (*os.File, string, error) {
 	if dir == "" {
 		dir = "./downloads"
 	}
-	_ = os.MkdirAll(dir, 0755)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, "", err
+	}
 
 	baseName := filepath.Base(fileName)
 	if baseName == "." || baseName == "/" {
@@ -660,15 +662,23 @@ func getUniqueFilePath(dir, fileName string) string {
 	nameWithoutExt := strings.TrimSuffix(baseName, ext)
 
 	target := filepath.Join(dir, baseName)
-	if _, err := os.Stat(target); os.IsNotExist(err) {
-		return target
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
+	if err == nil {
+		return f, target, nil
+	}
+	if !errors.Is(err, os.ErrExist) && !os.IsExist(err) {
+		return nil, "", err
 	}
 
 	for i := 1; ; i++ {
 		newName := fmt.Sprintf("%s(%d)%s", nameWithoutExt, i, ext)
 		target = filepath.Join(dir, newName)
-		if _, err := os.Stat(target); os.IsNotExist(err) {
-			return target
+		f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
+		if err == nil {
+			return f, target, nil
+		}
+		if !errors.Is(err, os.ErrExist) && !os.IsExist(err) {
+			return nil, "", err
 		}
 	}
 }
