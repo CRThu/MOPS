@@ -48,6 +48,18 @@
     isEditing = false;
   }
 
+  let isLaunchingChrome = false;
+
+  async function handleLaunchChrome() {
+    if (status && status.has_chrome === false) {
+      mopsStore.setError('未检测到系统中安装的 Google Chrome 浏览器，请先安装 Chrome');
+      return;
+    }
+    isLaunchingChrome = true;
+    await mopsStore.launchChrome();
+    isLaunchingChrome = false;
+  }
+
   function formatSpeed(bytesPerSec: number | undefined): string {
     if (!bytesPerSec || bytesPerSec <= 0) return '0.0 B/s';
     const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
@@ -85,7 +97,7 @@
         </h1>
         {#if status && $mopsStore.isOnline}
           <span class="text-[9px] font-mono bg-slate-800/90 text-blue-300 border border-blue-500/30 px-1.5 py-0.2 rounded shadow-sm">
-            :{status.client_port} SOCKS5
+            :{status.client_port} SOCKS5 / HTTP
           </span>
         {:else}
           <span class="text-[9px] font-mono bg-rose-950/80 text-rose-300 border border-rose-500/40 px-1.5 py-0.2 rounded shadow-sm animate-pulse">
@@ -97,6 +109,24 @@
 
     <!-- Window Control Buttons (Minimize to Tray & Close) -->
     <div class="flex items-center space-x-1" on:mousedown|stopPropagation>
+      <button
+        on:click={handleLaunchChrome}
+        disabled={isLaunchingChrome}
+        aria-label="启动多通道加速版 Chrome"
+        title={status && status.has_chrome !== false ? '一键启动多通道加速版 Chrome (已自动配置双节点分流与多管道加速)' : '未检测到 Chrome 浏览器 (请先安装)'}
+        class="p-1 rounded-md transition-all duration-150 active:scale-95 border flex items-center justify-center cursor-pointer {status && status.has_chrome !== false ? 'text-slate-300 hover:text-white bg-slate-800/60 hover:bg-slate-700/80 border-slate-700/70 hover:border-blue-400/50 shadow-sm' : 'text-slate-600 bg-slate-900/30 border-slate-800/30 cursor-not-allowed opacity-50'}"
+      >
+        <svg class="w-3.5 h-3.5 {isLaunchingChrome ? 'animate-spin' : ''}" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.2" class="text-slate-600/40"/>
+          <path d="M12 2C6.48 2 2 6.48 2 12C2 13.06 2.17 14.08 2.48 15.04L8.71 4.25C9.69 2.89 11.28 2 13.07 2H12Z" fill="#EA4335"/>
+          <path d="M12 22C16.41 22 20.14 19.14 21.46 15.15L15.23 4.36C14.25 3 12.66 2.11 10.87 2.11L5.89 10.74L12 22Z" fill="#4285F4"/>
+          <path d="M2.48 15.04C3.8 19.03 7.53 22 12 22L16.98 13.37L10.75 2.58C6.91 3.25 3.8 6.36 2.48 15.04Z" fill="#FBBC05"/>
+          <path d="M12 22C7.53 22 3.8 19.03 2.48 15.04L7.46 6.41L13.69 17.2C13.2 17.47 12.62 17.63 12 17.63V22Z" fill="#34A853"/>
+          <circle cx="12" cy="12" r="4.5" fill="#0f172a"/>
+          <circle cx="12" cy="12" r="3.2" fill="#1A73E8"/>
+        </svg>
+      </button>
+
       <button
         on:click={minimizeWindow}
         aria-label="最小化到托盘"

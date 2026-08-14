@@ -131,4 +131,30 @@ describe('State Layer - mopsStore Integration Tests', () => {
     expect(state.status?.advertise).toBe('192.168.1.88');
     expect(state.interfaces).toHaveLength(1);
   });
+
+  it('launchChrome should call api.launchChrome and return success', async () => {
+    vi.spyOn(api, 'launchChrome').mockResolvedValue({ browser: 'chrome', message: '启动成功' });
+
+    const res = await mopsStore.launchChrome();
+
+    expect(api.launchChrome).toHaveBeenCalled();
+    expect(res.success).toBe(true);
+
+    let state!: AppState;
+    mopsStore.subscribe((s) => (state = s))();
+    expect(state.error).toBeNull();
+  });
+
+  it('launchChrome should set error in store on API failure', async () => {
+    vi.spyOn(api, 'launchChrome').mockRejectedValue(new Error('未检测到 Chrome 浏览器'));
+
+    const res = await mopsStore.launchChrome();
+
+    expect(api.launchChrome).toHaveBeenCalled();
+    expect(res.success).toBe(false);
+
+    let state!: AppState;
+    mopsStore.subscribe((s) => (state = s))();
+    expect(state.error).toBe('未检测到 Chrome 浏览器');
+  });
 });

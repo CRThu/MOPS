@@ -12,6 +12,18 @@
     return a.ip.localeCompare(b.ip, undefined, { numeric: true });
   });
 
+  function formatBytes(bytes: number | undefined): string {
+    if (!bytes || bytes <= 0) return '0.000 MB';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    let val = bytes;
+    while (val >= 1024 && i < units.length - 1) {
+      val /= 1024;
+      i++;
+    }
+    return `${val.toFixed(3)} ${units[i]}`;
+  }
+
   async function handleSendFile(node: NodeInfo) {
     const filePath = await selectFile();
     if (filePath) {
@@ -49,51 +61,73 @@
   {:else}
     <div class="space-y-2">
       {#each sortedNodes as node (node.id)}
-        <div class="glass-card glass-card-hover rounded-xl p-2.5 flex items-center justify-between group">
-          <!-- Node Meta Info -->
-          <div class="flex items-center space-x-2.5 overflow-hidden">
-            <div class="p-2 rounded-lg bg-slate-900/80 border border-white/5 text-blue-400 shrink-0 group-hover:border-blue-500/30 transition-colors">
-              <Monitor class="w-3.5 h-3.5" />
+        <div class="glass-card glass-card-hover rounded-xl p-2.5 flex flex-col space-y-1.5 group">
+          <!-- Top Row: Node Meta Info & Actions -->
+          <div class="flex items-center justify-between">
+            <div class="flex items-center space-x-2.5 overflow-hidden">
+              <div class="p-2 rounded-lg bg-slate-900/80 border border-white/5 text-blue-400 shrink-0 group-hover:border-blue-500/30 transition-colors">
+                <Monitor class="w-3.5 h-3.5" />
+              </div>
+              <div class="overflow-hidden min-w-0">
+                <div class="flex items-center space-x-1.5">
+                  <span class="text-[11px] font-bold text-slate-100 truncate group-hover:text-blue-300 transition-colors">
+                    {node.hostname}
+                  </span>
+                  {#if node.is_me}
+                    <span class="text-[8px] bg-blue-950/80 text-blue-300 border border-blue-600/40 px-1 py-0.2 rounded font-mono shrink-0 shadow-sm">
+                      本机 / Local
+                    </span>
+                  {:else}
+                    <span class="text-[8px] bg-emerald-950/80 text-emerald-300 border border-emerald-600/40 px-1 py-0.2 rounded font-mono shrink-0 shadow-sm">
+                      Peer 节点
+                    </span>
+                  {/if}
+                </div>
+                <div class="text-[9px] font-mono text-slate-400 truncate flex items-center space-x-1.5 mt-0.5">
+                  <span>{node.ip}:{node.port}</span>
+                  {#if node.status === 'ONLINE'}
+                    <span class="inline-flex items-center space-x-1 text-emerald-400 font-sans text-[8px]">
+                      <span class="w-1 h-1 rounded-full bg-emerald-400 animate-pulse-glow"></span>
+                      <span>ONLINE</span>
+                    </span>
+                  {:else if node.status === 'NO_INTERNET'}
+                    <span class="inline-flex items-center space-x-1 text-amber-400 font-sans text-[8px]">
+                      <span class="w-1 h-1 rounded-full bg-amber-400"></span>
+                      <span>仅局域网 (无外网)</span>
+                    </span>
+                  {:else}
+                    <span class="inline-flex items-center space-x-1 text-slate-500 font-sans text-[8px]">
+                      <span class="w-1 h-1 rounded-full bg-slate-500"></span>
+                      <span>已离线</span>
+                    </span>
+                  {/if}
+                </div>
+              </div>
             </div>
-            <div class="overflow-hidden min-w-0">
-              <div class="flex items-center space-x-1.5">
-                <span class="text-[11px] font-bold text-slate-100 truncate group-hover:text-blue-300 transition-colors">
-                  {node.hostname}
-                </span>
-                {#if node.is_me}
-                  <span class="text-[8px] bg-blue-950/80 text-blue-300 border border-blue-600/40 px-1 py-0.2 rounded font-mono shrink-0 shadow-sm">
-                    本机 / Local
-                  </span>
-                {:else}
-                  <span class="text-[8px] bg-emerald-950/80 text-emerald-300 border border-emerald-600/40 px-1 py-0.2 rounded font-mono shrink-0 shadow-sm">
-                    Peer 节点
-                  </span>
-                {/if}
-              </div>
-              <div class="text-[9px] font-mono text-slate-400 truncate flex items-center space-x-1.5 mt-0.5">
-                <span>{node.ip}:{node.port}</span>
-                {#if node.status === 'ONLINE'}
-                  <span class="inline-flex items-center space-x-1 text-emerald-400 font-sans text-[8px]">
-                    <span class="w-1 h-1 rounded-full bg-emerald-400 animate-pulse-glow"></span>
-                    <span>ONLINE</span>
-                  </span>
-                {/if}
-              </div>
+
+            <!-- Actions -->
+            <div class="shrink-0 flex items-center space-x-2">
+              {#if !node.is_me}
+                <button
+                  on:click={() => handleSendFile(node)}
+                  aria-label="传输文件"
+                  class="flex items-center space-x-1 text-[10px] font-bold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white px-2.5 py-1 rounded-lg transition-all duration-200 shadow hover:shadow-blue-500/20 active:scale-95 border border-blue-400/20"
+                >
+                  <Send class="w-2.5 h-2.5 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                  <span>传输文件</span>
+                </button>
+              {/if}
             </div>
           </div>
 
-          <!-- Actions -->
-          <div class="shrink-0 flex items-center space-x-2">
-            {#if !node.is_me}
-              <button
-                on:click={() => handleSendFile(node)}
-                aria-label="传输文件"
-                class="flex items-center space-x-1 text-[10px] font-bold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white px-2.5 py-1 rounded-lg transition-all duration-200 shadow hover:shadow-blue-500/20 active:scale-95 border border-blue-400/20"
-              >
-                <Send class="w-2.5 h-2.5 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-                <span>传输文件</span>
-              </button>
-            {/if}
+          <!-- Bottom Row: Simple Stats (active/success/fail | bytes up/down) -->
+          <div class="text-[9px] font-mono text-slate-400 flex items-center justify-between border-t border-white/5 pt-1 px-0.5">
+            <span>
+              {node.active_conns || 0}/{node.success_conns || 0}/{node.fail_conns || 0}
+            </span>
+            <span>
+              ↑ {formatBytes(node.bytes_up)} | ↓ {formatBytes(node.bytes_down)}
+            </span>
           </div>
         </div>
       {/each}

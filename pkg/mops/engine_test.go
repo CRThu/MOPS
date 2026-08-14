@@ -1,6 +1,7 @@
 package mops
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -676,6 +677,370 @@ func TestEngineDownloadDirAndProgress(t *testing.T) {
 
 	prog := eng.GetTransferProgress()
 	assert.Equal(t, "IDLE", prog.Status)
+}
+
+func TestDefaultInternetProbe(t *testing.T) {
+	// DefaultInternetProbe tries to dial 223.5.5.5:53 / 1.1.1.1:53 with 2s timeout.
+	// We verify it returns a boolean without panic or hang.
+	result := DefaultInternetProbe()
+	t.Logf("DefaultInternetProbe result: %v", result)
+}
+
+func TestNodeThreeStatesAndSelectNode(t *testing.T) {
+	eng := NewEngine(Config{
+		ServerPort: 10870,
+		ClientPort: 10871,
+		Hostname:   "SelectNodeTester",
+		Advertise:  "127.0.0.1",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Initial start with self node
+	require.NoError(t, eng.Start(ctx))
+	defer eng.Stop()
+
+	// Add remote nodes with 3 distinct states
+	eng.UpdateNode(&Node{
+		ID:       "node-online",
+		Hostname: "NodeOnline",
+		IP:       "192.168.1.101",
+		Port:     10080,
+		Status:   NodeStatusOnline,
+	})
+	eng.UpdateNode(&Node{
+		ID:       "node-no-internet",
+		Hostname: "NodeNoInternet",
+		IP:       "192.168.1.102",
+		Port:     10080,
+		Status:   NodeStatusNoInternet,
+	})
+	eng.UpdateNode(&Node{
+		ID:       "node-offline",
+		Hostname: "NodeOffline",
+		IP:       "192.168.1.103",
+		Port:     10080,
+		Status:   NodeStatusOffline,
+	})
+
+	// Manually set self node to NO_INTERNET to test selection strictly filters only ONLINE nodes
+	selfIP := ResolveAdvertiseIP("127.0.0.1")
+	selfID := fmt.Sprintf("SelectNodeTester@%s:10870", selfIP)
+	eng.mu.Lock()
+	if me, ok := eng.nodes[selfID]; ok {
+		me.Status = NodeStatusNoInternet
+	}
+	eng.mu.Unlock()
+
+	// Only node-online should be picked
+	for i := 0; i < 5; i++ {
+		selected, err := eng.selectNode()
+		require.NoError(t, err)
+		assert.Equal(t, "node-online", selected.ID)
+		assert.Equal(t, NodeStatusOnline, selected.Status)
+	}
+
+	// Now mark node-online as OFFLINE
+	eng.RemoveNode("node-online")
+
+	// Now all nodes are either NO_INTERNET or OFFLINE, selectNode should return error
+	_, err := eng.selectNode()
+	assert.ErrorContains(t, err, "no available online nodes")
+}
+
+func TestProbeLoopStateTransition(t *testing.T) {
+	eng := NewEngine(Config{
+		ServerPort: 10880,
+		ClientPort: 10881,
+		Hostname:   "ProbeTransitionHost",
+		Advertise:  "127.0.0.1",
+	})
+	eng.SetProbeInterval(50 * time.Millisecond)
+
+	var internetStatus int32 = 1 // 1: online, 0: offline
+	eng.SetProbeFunc(func() bool {
+		return atomic.LoadInt32(&internetStatus) == 1
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, eng.Start(ctx))
+	defer eng.Stop()
+
+	disc := NewDiscovery(eng)
+	require.NoError(t, disc.Start(ctx))
+	defer disc.Stop()
+
+	selfIP := ResolveAdvertiseIP("127.0.0.1")
+	selfID := fmt.Sprintf("ProbeTransitionHost@%s:10880", selfIP)
+
+	// 1. Initially online
+	eng.TriggerProbe()
+	eng.mu.RLock()
+	assert.Equal(t, NodeStatusOnline, eng.nodes[selfID].Status)
+	eng.mu.RUnlock()
+	assert.False(t, disc.IsPaused())
+
+	// 2. Simulate disconnect / no internet
+	atomic.StoreInt32(&internetStatus, 0)
+	eng.TriggerProbe()
+
+	eng.mu.RLock()
+	assert.Equal(t, NodeStatusNoInternet, eng.nodes[selfID].Status)
+	eng.mu.RUnlock()
+	assert.True(t, disc.IsPaused())
+
+	// 3. Simulate internet restore
+	atomic.StoreInt32(&internetStatus, 1)
+	eng.TriggerProbe()
+
+	eng.mu.RLock()
+	assert.Equal(t, NodeStatusOnline, eng.nodes[selfID].Status)
+	eng.mu.RUnlock()
+	assert.False(t, disc.IsPaused())
+}
+
+func TestNodeConnectionCountersSuccessAndFail(t *testing.T) {
+	// 1. Target Echo Server
+	targetListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer targetListener.Close()
+	targetPort := targetListener.Addr().(*net.TCPAddr).Port
+
+	go func() {
+		for {
+			conn, err := targetListener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 1024)
+				n, _ := c.Read(buf)
+				if n > 0 {
+					c.Write([]byte("ECHO: " + string(buf[:n])))
+				}
+			}(conn)
+		}
+	}()
+
+	// 2. Start Engine
+	sPort := getFreePort()
+	cPort := getFreePort()
+	eng := NewEngine(Config{
+		ServerPort: sPort,
+		ClientPort: cPort,
+		ListenAddr: "127.0.0.1",
+		Hostname:   "CounterHost",
+		Advertise:  "127.0.0.1",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, eng.Start(ctx))
+	defer eng.Stop()
+
+	// 3. Perform a successful SOCKS5 request
+	proxyAddr := fmt.Sprintf("127.0.0.1:%d", cPort)
+	conn, err := net.Dial("tcp", proxyAddr)
+	require.NoError(t, err)
+	_, _ = conn.Write([]byte{0x05, 0x01, 0x00})
+	resp := make([]byte, 2)
+	_, _ = io.ReadFull(conn, resp)
+	req := []byte{0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, byte(targetPort >> 8), byte(targetPort & 0xff)}
+	_, _ = conn.Write(req)
+	sResp := make([]byte, 10)
+	_, _ = io.ReadFull(conn, sResp)
+	_, _ = conn.Write([]byte("ping"))
+	conn.Close()
+
+	// Verify SuccessConns incremented
+	nodes := eng.GetNodes()
+	require.NotEmpty(t, nodes)
+	var totalSuccess uint64
+	for _, n := range nodes {
+		totalSuccess += n.SuccessConns
+	}
+	assert.Greater(t, totalSuccess, uint64(0))
+
+	// 4. Add a dummy unreachable node to test FailConns
+	eng.UpdateNode(&Node{
+		ID:       "dummy-fail-node",
+		Hostname: "DummyFailNode",
+		IP:       "192.0.2.1", // non-routable IP
+		Port:     59999,
+		Status:   NodeStatusOnline,
+	})
+
+	// Dial through proxy multiple times to trigger failover on dummy node
+	for i := 0; i < 5; i++ {
+		failConn, err := net.Dial("tcp", proxyAddr)
+		if err == nil {
+			_, _ = failConn.Write([]byte{0x05, 0x01, 0x00})
+			_, _ = io.ReadFull(failConn, resp)
+			_, _ = failConn.Write(req)
+			failResp := make([]byte, 10)
+			_, _ = io.ReadFull(failConn, failResp)
+			failConn.Close()
+		}
+	}
+
+	nodesAfter := eng.GetNodes()
+	for _, n := range nodesAfter {
+		if n.ID == "dummy-fail-node" {
+			assert.Greater(t, n.FailConns, uint64(0))
+			assert.Equal(t, NodeStatusOffline, n.Status)
+		}
+	}
+}
+
+func TestEngineHttpConnectProxyFlow(t *testing.T) {
+	// 1. Target TCP Echo Server
+	targetListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer targetListener.Close()
+	targetPort := targetListener.Addr().(*net.TCPAddr).Port
+
+	go func() {
+		conn, err := targetListener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		buf := make([]byte, 1024)
+		n, _ := conn.Read(buf)
+		if n > 0 {
+			conn.Write([]byte("HTTP_ECHO: " + string(buf[:n])))
+		}
+	}()
+
+	// 2. Start Engine
+	sPort := getFreePort()
+	cPort := getFreePort()
+	eng := NewEngine(Config{
+		ServerPort: sPort,
+		ClientPort: cPort,
+		ListenAddr: "127.0.0.1",
+		Hostname:   "HttpProxyTester",
+		Advertise:  "127.0.0.1",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, eng.Start(ctx))
+	defer eng.Stop()
+
+	// 3. Connect via HTTP CONNECT to hybrid 10081 port
+	proxyConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", cPort))
+	require.NoError(t, err)
+	defer proxyConn.Close()
+
+	// Send HTTP CONNECT request
+	connectReq := fmt.Sprintf("CONNECT 127.0.0.1:%d HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nUser-Agent: curl/8.0\r\n\r\n", targetPort, targetPort)
+	_, err = proxyConn.Write([]byte(connectReq))
+	require.NoError(t, err)
+
+	// Read HTTP 200 Connection Established response
+	bufReader := bufio.NewReader(proxyConn)
+	statusLine, err := bufReader.ReadString('\n')
+	require.NoError(t, err)
+	assert.Contains(t, statusLine, "200 Connection Established")
+
+	// Read empty line
+	_, err = bufReader.ReadString('\n')
+	require.NoError(t, err)
+
+	// Send raw payload
+	testMsg := "Hello HTTP Tunnel"
+	_, err = proxyConn.Write([]byte(testMsg))
+	require.NoError(t, err)
+
+	readBuf := make([]byte, 1024)
+	n, err := bufReader.Read(readBuf)
+	require.NoError(t, err)
+	assert.Equal(t, "HTTP_ECHO: "+testMsg, string(readBuf[:n]))
+}
+
+func TestEnginePlainHttpProxyFlow(t *testing.T) {
+	// 1. Target Plain HTTP Echo Server
+	targetListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer targetListener.Close()
+	targetPort := targetListener.Addr().(*net.TCPAddr).Port
+
+	go func() {
+		conn, err := targetListener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		buf := make([]byte, 1024)
+		n, _ := conn.Read(buf)
+		if n > 0 {
+			resp := "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello From Web"
+			conn.Write([]byte(resp))
+		}
+	}()
+
+	// 2. Start Engine
+	sPort := getFreePort()
+	cPort := getFreePort()
+	eng := NewEngine(Config{
+		ServerPort: sPort,
+		ClientPort: cPort,
+		ListenAddr: "127.0.0.1",
+		Hostname:   "PlainHttpTester",
+		Advertise:  "127.0.0.1",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, eng.Start(ctx))
+	defer eng.Stop()
+
+	// 3. Send absolute GET request to hybrid port
+	proxyConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", cPort))
+	require.NoError(t, err)
+	defer proxyConn.Close()
+
+	getReq := fmt.Sprintf("GET http://127.0.0.1:%d/index.html HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nProxy-Connection: keep-alive\r\n\r\n", targetPort, targetPort)
+	_, err = proxyConn.Write([]byte(getReq))
+	require.NoError(t, err)
+
+	bufReader := bufio.NewReader(proxyConn)
+	statusLine, err := bufReader.ReadString('\n')
+	require.NoError(t, err)
+	assert.Contains(t, statusLine, "200 OK")
+}
+
+func TestEngineStrictRoundRobinDistribution(t *testing.T) {
+	eng := NewEngine(Config{
+		ServerPort: 0,
+		ClientPort: getFreePort(),
+		Hostname:   "RRTester",
+	})
+
+	// Add 2 remote nodes
+	eng.UpdateNode(&Node{
+		ID:       "node-A",
+		Hostname: "NodeA",
+		IP:       "192.168.1.1",
+		Port:     10080,
+		Status:   NodeStatusOnline,
+	})
+	eng.UpdateNode(&Node{
+		ID:       "node-B",
+		Hostname: "NodeB",
+		IP:       "192.168.1.2",
+		Port:     10080,
+		Status:   NodeStatusOnline,
+	})
+
+	// Perform 10 selections and verify strict 1:1 alternating order: A, B, A, B, A, B...
+	expectedOrder := []string{"node-A", "node-B", "node-A", "node-B", "node-A", "node-B", "node-A", "node-B", "node-A", "node-B"}
+	for i, expectedID := range expectedOrder {
+		selected, err := eng.selectNode()
+		require.NoError(t, err)
+		assert.Equal(t, expectedID, selected.ID, "Failed at iteration %d", i)
+	}
 }
 
 

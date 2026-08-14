@@ -193,3 +193,34 @@ func TestParseServiceEntryEdgeCases(t *testing.T) {
 	assert.Equal(t, 10080, n6.Port)
 }
 
+func TestDiscoveryPauseAndResume(t *testing.T) {
+	eng := NewEngine(Config{
+		ServerPort: getFreePort(),
+		ClientPort: getFreePort(),
+		Hostname:   "PauseResumeHost",
+		Advertise:  "127.0.0.1",
+	})
+	eng.SetProbeFunc(func() bool { return false })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, eng.Start(ctx))
+	defer eng.Stop()
+
+	disc := NewDiscovery(eng)
+	require.NoError(t, disc.Start(ctx))
+	defer disc.Stop()
+
+	assert.False(t, disc.IsPaused())
+
+	// Pause
+	disc.PauseAdvertise()
+	assert.True(t, disc.IsPaused())
+	assert.Nil(t, disc.server)
+
+	// Resume
+	disc.ResumeAdvertise()
+	assert.False(t, disc.IsPaused())
+	assert.NotNil(t, disc.server)
+}
+

@@ -145,6 +145,18 @@ function createMopsStore() {
     }
   }
 
+  async function launchChrome(): Promise<{ success: boolean; message: string }> {
+    try {
+      update((s) => ({ ...s, error: null }));
+      const res = await api.launchChrome();
+      return { success: true, message: res.message || '已成功启动多通道加速版 Chrome' };
+    } catch (err: any) {
+      const errMsg = err.message || '启动 Chrome 失败';
+      update((s) => ({ ...s, error: errMsg }));
+      return { success: false, message: errMsg };
+    }
+  }
+
   function setError(msg: string | null) {
     update((s) => ({ ...s, error: msg }));
   }
@@ -165,6 +177,7 @@ function createMopsStore() {
     startFileTransfer,
     updateDownloadDir,
     updateAdvertise,
+    launchChrome,
     setError,
     clearError,
     reset: () => set(initialState),

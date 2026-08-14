@@ -6,6 +6,8 @@ export interface NodeInfo {
   role: string;
   status: string;
   active_conns: number;
+  success_conns: number;
+  fail_conns: number;
   bytes_up: number;
   bytes_down: number;
   last_seen: string;
@@ -42,6 +44,7 @@ export interface StatusData {
   total_nodes: number;
   online_nodes: number;
   advertise?: string;
+  has_chrome?: boolean;
 }
 
 export interface ProgressData {
@@ -169,6 +172,16 @@ export class ApiClient {
       throw new Error(res.message);
     }
     return res.message;
+  }
+
+  async launchChrome(): Promise<{ browser: string; message: string }> {
+    const res = await this.request<{ browser: string }>('/api/v1/browser/launch?browser=chrome', {
+      method: 'POST',
+    });
+    if (res.code !== 200) {
+      throw new Error(res.message || '启动 Chrome 失败');
+    }
+    return { browser: 'chrome', message: res.message };
   }
 }
 

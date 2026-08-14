@@ -45,7 +45,7 @@ func RenderStatusWithProxyInfo(nodes []*Node, strategy string, clientPort int, s
 
 	activeCount := 0
 	for _, n := range nodes {
-		if n.Status == "ONLINE" {
+		if n.Status == NodeStatusOnline {
 			activeCount++
 		}
 	}

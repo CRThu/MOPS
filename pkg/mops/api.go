@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -40,6 +42,7 @@ type StatusData struct {
 	OnlineNodes   int             `json:"online_nodes"`
 	DownloadDir   string          `json:"download_dir"`
 	Advertise     string          `json:"advertise"`
+	HasChrome     bool            `json:"has_chrome"`
 }
 
 // APIServer manages the RESTful HTTP API server.
@@ -80,6 +83,7 @@ func (a *APIServer) Start(port int, listenAddr string) error {
 	mux.HandleFunc("/api/v1/config", a.handleConfig)
 	mux.HandleFunc("/api/v1/interfaces", a.handleInterfaces)
 	mux.HandleFunc("/api/v1/service", a.handleServiceControl)
+	mux.HandleFunc("/api/v1/browser/launch", a.handleLaunchBrowser)
 
 	a.server = &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +144,7 @@ func (a *APIServer) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	nodes := a.engine.GetNodes()
 	onlineCount := 0
 	for _, n := range nodes {
-		if n.Status == "ONLINE" {
+		if n.Status == NodeStatusOnline {
 			onlineCount++
 		}
 	}
@@ -166,6 +170,7 @@ func (a *APIServer) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		OnlineNodes:   onlineCount,
 		DownloadDir:   a.engine.GetDownloadDir(),
 		Advertise:     ResolveAdvertiseIP(a.engine.GetAdvertise()),
+		HasChrome:     FindChromePath() != "",
 	}
 
 	writeJSON(w, http.StatusOK, APIResponse{
@@ -583,6 +588,74 @@ func (a *APIServer) handleInterfaces(w http.ResponseWriter, r *http.Request) {
 		Data:    ifaces,
 		Total:   len(ifaces),
 	})
+}
+
+func (a *APIServer) handleLaunchBrowser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{
+			Code:    http.StatusMethodNotAllowed,
+			Message: "Method Not Allowed",
+		})
+		return
+	}
+
+	exePath := FindChromePath()
+	if exePath == "" {
+		writeJSON(w, http.StatusNotFound, APIResponse{
+			Code:    http.StatusNotFound,
+			Message: "未检测到系统中安装的 Google Chrome 浏览器，请先安装 Chrome",
+		})
+		return
+	}
+
+	clientPort := 10081
+	if a.engine != nil && a.engine.cfg.ClientPort > 0 {
+		clientPort = a.engine.cfg.ClientPort
+	}
+
+	args := []string{
+		"--disable-http2",
+		"--disable-quic",
+		fmt.Sprintf("--proxy-server=http://127.0.0.1:%d", clientPort),
+	}
+
+	cmd := exec.Command(exePath, args...)
+	if err := cmd.Start(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, APIResponse{
+			Code:    http.StatusInternalServerError,
+			Message: fmt.Sprintf("启动 Chrome 失败: %v", err),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, APIResponse{
+		Code:    http.StatusOK,
+		Message: "已成功启动多通道加速版 Chrome",
+		Data: map[string]interface{}{
+			"browser":  "chrome",
+			"exe_path": exePath,
+			"args":     args,
+		},
+	})
+}
+
+// FindChromePath attempts to locate Google Chrome executable on the system.
+func FindChromePath() string {
+	candidates := []string{
+		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+		filepath.Join(os.Getenv("LOCALAPPDATA"), `Google\Chrome\Application\chrome.exe`),
+		filepath.Join(os.Getenv("PROGRAMFILES"), `Google\Chrome\Application\chrome.exe`),
+		filepath.Join(os.Getenv("PROGRAMFILES(X86)"), `Google\Chrome\Application\chrome.exe`),
+	}
+	for _, p := range candidates {
+		if p != "" {
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
+		}
+	}
+	return ""
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {

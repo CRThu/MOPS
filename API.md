@@ -49,6 +49,8 @@ RESTful API 返回的标准 JSON 结构体如下：
       "role": "Both",
       "status": "ONLINE",
       "active_conns": 0,
+      "success_conns": 128,
+      "fail_conns": 0,
       "bytes_up": 1048576,
       "bytes_down": 5242880,
       "last_seen": "2026-08-06T16:00:00+08:00",
@@ -93,7 +95,8 @@ RESTful API 返回的标准 JSON 结构体如下：
     "bytes_up": 1048576,
     "bytes_down": 52428800,
     "total_nodes": 3,
-    "online_nodes": 3
+    "online_nodes": 3,
+    "has_chrome": true
   }
 }
 ```
@@ -293,6 +296,43 @@ curl -X POST "http://127.0.0.1:10082/api/v1/files/transfer?target_ip=192.168.132
 {
   "code": 200,
   "message": "service action install executed successfully"
+}
+```
+
+---
+
+## 10. 一键启动多通道加速版 Chrome 浏览器
+
+自动探测系统中已安装的 Google Chrome 浏览器路径，并附加 `--disable-http2 --disable-quic --proxy-server=http://127.0.0.1:{client_port}` 参数直接启动，实现突破单长连接限制的多通道并发加速。
+
+- **请求路径**: `/api/v1/browser/launch`
+- **请求方法**: `POST`
+- **Query 参数 (选填)**: `browser=chrome`
+
+### 响应示例（已安装 Chrome）
+
+```json
+{
+  "code": 200,
+  "message": "已成功启动多通道加速版 Chrome",
+  "data": {
+    "browser": "chrome",
+    "exe_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "args": [
+      "--disable-http2",
+      "--disable-quic",
+      "--proxy-server=http://127.0.0.1:10081"
+    ]
+  }
+}
+```
+
+### 响应示例（未安装 Chrome）
+
+```json
+{
+  "code": 404,
+  "message": "未检测到系统中安装的 Google Chrome 浏览器，请先安装 Chrome"
 }
 ```
 

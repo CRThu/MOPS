@@ -552,3 +552,49 @@ func TestAPIConfigProgressAndService(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	resp.Body.Close()
 }
+
+func TestAPILaunchBrowser(t *testing.T) {
+	apiPort := getFreePort()
+	cfg := Config{
+		ServerPort: 0,
+		ClientPort: getFreePort(),
+		APIPort:    apiPort,
+		Hostname:   "BrowserTestNode",
+	}
+
+	engine := NewEngine(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// 1. GET /api/v1/status check has_chrome field
+	statusResp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/status", apiPort))
+	require.NoError(t, err)
+	var sResp APIResponse
+	require.NoError(t, json.NewDecoder(statusResp.Body).Decode(&sResp))
+	statusResp.Body.Close()
+	assert.Equal(t, 200, sResp.Code)
+
+	// 2. GET /api/v1/browser/launch -> Method Not Allowed (405)
+	getResp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/browser/launch", apiPort))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusMethodNotAllowed, getResp.StatusCode)
+	getResp.Body.Close()
+
+	// 3. POST /api/v1/browser/launch
+	postResp, err := client.Post(fmt.Sprintf("http://127.0.0.1:%d/api/v1/browser/launch", apiPort), "application/json", nil)
+	require.NoError(t, err)
+	var launchResp APIResponse
+	require.NoError(t, json.NewDecoder(postResp.Body).Decode(&launchResp))
+	postResp.Body.Close()
+	// If Chrome is installed on system, 200; if not, 404
+	if FindChromePath() != "" {
+		assert.Equal(t, 200, launchResp.Code)
+	} else {
+		assert.Equal(t, 404, launchResp.Code)
+	}
+}

@@ -52,6 +52,38 @@ describe('Infrastructure Layer - ApiClient Unit Tests', () => {
     expect(nodes).toEqual([]);
   });
 
+  it('getNodes should parse node connection stats and traffic correctly', async () => {
+    const mockNode = {
+      id: 'Node1@192.168.1.100:10080',
+      hostname: 'Node1',
+      ip: '192.168.1.100',
+      port: 10080,
+      role: 'Server',
+      status: 'ONLINE',
+      active_conns: 5,
+      success_conns: 120,
+      fail_conns: 2,
+      bytes_up: 5242880,
+      bytes_down: 104857600,
+      last_seen: new Date().toISOString(),
+      is_me: false,
+    };
+
+    (fetch as any).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ code: 200, message: 'success', data: [mockNode] }),
+    });
+
+    const nodes = await api.getNodes();
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].active_conns).toBe(5);
+    expect(nodes[0].success_conns).toBe(120);
+    expect(nodes[0].fail_conns).toBe(2);
+    expect(nodes[0].bytes_up).toBe(5242880);
+    expect(nodes[0].bytes_down).toBe(104857600);
+    expect(nodes[0].status).toBe('ONLINE');
+  });
+
   it('toggleSystemProxy should send POST request with action parameter and optional proxy_addr', async () => {
     (fetch as any).mockResolvedValueOnce({
       ok: true,
@@ -151,6 +183,24 @@ describe('Infrastructure Layer - ApiClient Unit Tests', () => {
       })
     );
     expect(res.advertise).toBe('192.168.1.200');
+  });
+
+  it('launchChrome should send POST request to /api/v1/browser/launch', async () => {
+    (fetch as any).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        code: 200,
+        message: '已成功启动多通道加速版 Chrome',
+        data: { browser: 'chrome' },
+      }),
+    });
+
+    const res = await api.launchChrome();
+    expect(fetch).toHaveBeenCalledWith(
+      `${mockBaseUrl}/api/v1/browser/launch?browser=chrome`,
+      expect.objectContaining({ method: 'POST' })
+    );
+    expect(res.browser).toBe('chrome');
   });
 
   it('should throw error when HTTP response is not ok (e.g. 500)', async () => {

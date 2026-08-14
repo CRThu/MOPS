@@ -21,13 +21,18 @@ type Discovery struct {
 	resolver *zeroconf.Resolver
 	mu       sync.Mutex
 	cancel   context.CancelFunc
+	paused   bool
 }
 
 // NewDiscovery creates a new mDNS discovery service.
 func NewDiscovery(engine *Engine) *Discovery {
-	return &Discovery{
+	d := &Discovery{
 		engine: engine,
 	}
+	if engine != nil {
+		engine.SetDiscovery(d)
+	}
+	return d
 }
 
 // Start registers local service and browses for remote nodes.
@@ -38,36 +43,12 @@ func (d *Discovery) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	d.cancel = cancel
 
-	// 1. Register mDNS Service
-	if d.engine.cfg.ServerPort > 0 {
-		var ips []string
-		selfIP := ResolveAdvertiseIP(d.engine.cfg.Advertise)
-		if selfIP != "" && selfIP != "127.0.0.1" {
-			ips = append(ips, selfIP)
-		}
-
-		nodeID := fmt.Sprintf("%s@%s:%d", d.engine.cfg.Hostname, selfIP, d.engine.cfg.ServerPort)
-		instanceName := fmt.Sprintf("%s-%d", d.engine.cfg.Hostname, d.engine.cfg.ServerPort)
-		text := []string{
-			"id=" + nodeID,
-			"hostname=" + d.engine.cfg.Hostname,
-			"port=" + strconv.Itoa(d.engine.cfg.ServerPort),
-			"role=Server",
-		}
-
-		validIfaces := getMulticastInterfaces()
-		srv, err := zeroconf.Register(
-			instanceName,
-			ServiceType,
-			"local.",
-			d.engine.cfg.ServerPort,
-			text,
-			validIfaces,
-		)
-		if err == nil {
-			d.server = srv
-		}
+	if d.engine != nil {
+		d.engine.SetDiscovery(d)
 	}
+
+	// 1. Register mDNS Service
+	d.registerServerLocked()
 
 	// 2. Browse mDNS Services
 	resolver, err := zeroconf.NewResolver(nil)
@@ -181,6 +162,68 @@ func getMulticastInterfaces() []net.Interface {
 	return validIfaces
 }
 
+func (d *Discovery) registerServerLocked() {
+	if d.server != nil || d.paused || d.engine == nil || d.engine.cfg.ServerPort <= 0 {
+		return
+	}
+
+	var ips []string
+	selfIP := ResolveAdvertiseIP(d.engine.cfg.Advertise)
+	if selfIP != "" && selfIP != "127.0.0.1" {
+		ips = append(ips, selfIP)
+	}
+
+	nodeID := fmt.Sprintf("%s@%s:%d", d.engine.cfg.Hostname, selfIP, d.engine.cfg.ServerPort)
+	instanceName := fmt.Sprintf("%s-%d", d.engine.cfg.Hostname, d.engine.cfg.ServerPort)
+	text := []string{
+		"id=" + nodeID,
+		"hostname=" + d.engine.cfg.Hostname,
+		"port=" + strconv.Itoa(d.engine.cfg.ServerPort),
+		"role=Server",
+	}
+
+	validIfaces := getMulticastInterfaces()
+	srv, err := zeroconf.Register(
+		instanceName,
+		ServiceType,
+		"local.",
+		d.engine.cfg.ServerPort,
+		text,
+		validIfaces,
+	)
+	if err == nil {
+		d.server = srv
+	}
+}
+
+// PauseAdvertise pauses the local mDNS service broadcast (e.g. when disconnected from internet).
+func (d *Discovery) PauseAdvertise() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.paused = true
+	if d.server != nil {
+		d.server.Shutdown()
+		d.server = nil
+	}
+}
+
+// ResumeAdvertise resumes the local mDNS service broadcast (e.g. when internet is restored).
+func (d *Discovery) ResumeAdvertise() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.paused = false
+	d.registerServerLocked()
+}
+
+// IsPaused returns whether local mDNS service broadcast is currently paused.
+func (d *Discovery) IsPaused() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.paused
+}
+
 // Stop shuts down the mDNS service registration and browser.
 func (d *Discovery) Stop() {
 	d.mu.Lock()
@@ -191,6 +234,7 @@ func (d *Discovery) Stop() {
 	}
 	if d.server != nil {
 		d.server.Shutdown()
+		d.server = nil
 	}
 }
 

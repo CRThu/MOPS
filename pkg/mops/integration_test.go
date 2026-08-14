@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -393,5 +394,89 @@ func TestEndToEndMultiNodeFileTransfer(t *testing.T) {
 	dataMap, ok := apiResp.Data.(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, expectedHash, dataMap["file_hash"])
+}
+
+func TestEndToEndCurlHttpAndSocks5Proxy(t *testing.T) {
+	// 1. Target HTTP Web Server
+	destListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer destListener.Close()
+
+	destPort := destListener.Addr().(*net.TCPAddr).Port
+
+	var s1Hits, s2Hits int64
+
+	go func() {
+		for {
+			conn, err := destListener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 2048)
+				n, _ := c.Read(buf)
+				if n > 0 {
+					resp := "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 12\r\n\r\nHello Client"
+					c.Write([]byte(resp))
+				}
+			}(conn)
+		}
+	}()
+
+	// 2. Server 1 & Server 2 Nodes
+	s1Port := getFreePort()
+	engS1 := NewEngine(Config{ServerPort: s1Port, ClientPort: 0, Hostname: "S1", Advertise: "127.0.0.1"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, engS1.Start(ctx))
+	defer engS1.Stop()
+
+	s2Port := getFreePort()
+	engS2 := NewEngine(Config{ServerPort: s2Port, ClientPort: 0, Hostname: "S2", Advertise: "127.0.0.1"})
+	require.NoError(t, engS2.Start(ctx))
+	defer engS2.Stop()
+
+	// 3. Client Node with hybrid 10081 port
+	cPort := getFreePort()
+	engClient := NewEngine(Config{ServerPort: 0, ClientPort: cPort, Hostname: "ClientNode", Advertise: "127.0.0.1"})
+	require.NoError(t, engClient.Start(ctx))
+	defer engClient.Stop()
+
+	engClient.UpdateNode(&Node{ID: "node-s1", Hostname: "S1", IP: "127.0.0.1", Port: s1Port, Status: NodeStatusOnline})
+	engClient.UpdateNode(&Node{ID: "node-s2", Hostname: "S2", IP: "127.0.0.1", Port: s2Port, Status: NodeStatusOnline})
+
+	// 4. Test HTTP Client using HTTP Proxy URL (equivalent to curl -x http://127.0.0.1:cPort)
+	proxyURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", cPort))
+	require.NoError(t, err)
+
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		},
+		Timeout: 3 * time.Second,
+	}
+
+	// Send 6 HTTP requests through proxy
+	for i := 0; i < 6; i++ {
+		resp, err := httpClient.Get(fmt.Sprintf("http://127.0.0.1:%d/test", destPort))
+		require.NoError(t, err)
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		assert.Equal(t, "Hello Client", string(body))
+	}
+
+	// Verify both servers processed requests evenly (3 each out of 6)
+	nodes := engClient.GetNodes()
+	for _, n := range nodes {
+		if n.ID == "node-s1" {
+			s1Hits = int64(n.SuccessConns)
+		}
+		if n.ID == "node-s2" {
+			s2Hits = int64(n.SuccessConns)
+		}
+	}
+	assert.Equal(t, int64(3), s1Hits, "Server 1 should have received exactly 3 requests")
+	assert.Equal(t, int64(3), s2Hits, "Server 2 should have received exactly 3 requests")
 }
 

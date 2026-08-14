@@ -2,6 +2,7 @@ package mops
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,6 +18,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+)
+
+// Node status constants
+const (
+	NodeStatusOnline     = "ONLINE"
+	NodeStatusNoInternet = "NO_INTERNET"
+	NodeStatusOffline    = "OFFLINE"
 )
 
 // Header defines the tunnel handshake protocol header.
@@ -38,17 +46,19 @@ type Trailer struct {
 
 // Node represents a cluster proxy server node.
 type Node struct {
-	ID         string    `json:"id"`
-	Hostname   string    `json:"hostname"`
-	IP         string    `json:"ip"`
-	Port       int       `json:"port"`
-	Role       string    `json:"role"`
-	Status     string    `json:"status"`
-	ActiveConn int64     `json:"active_conns"`
-	BytesUp    uint64    `json:"bytes_up"`
-	BytesDown  uint64    `json:"bytes_down"`
-	LastSeen   time.Time `json:"last_seen"`
-	IsMe       bool      `json:"is_me"`
+	ID           string    `json:"id"`
+	Hostname     string    `json:"hostname"`
+	IP           string    `json:"ip"`
+	Port         int       `json:"port"`
+	Role         string    `json:"role"`
+	Status       string    `json:"status"`
+	ActiveConn   int64     `json:"active_conns"`
+	SuccessConns uint64    `json:"success_conns"`
+	FailConns    uint64    `json:"fail_conns"`
+	BytesUp      uint64    `json:"bytes_up"`
+	BytesDown    uint64    `json:"bytes_down"`
+	LastSeen     time.Time `json:"last_seen"`
+	IsMe         bool      `json:"is_me"`
 }
 
 // TransferProgress represents real-time file transfer progress metadata.
@@ -83,6 +93,7 @@ type Engine struct {
 	serverListener net.Listener
 	clientListener net.Listener
 	apiServer      *APIServer
+	discovery      *Discovery
 
 	running       bool
 	serverRunning bool
@@ -104,6 +115,10 @@ type Engine struct {
 
 	// Active file transfer progress
 	progress TransferProgress
+
+	// Internet access probe
+	probeFunc     func() bool
+	probeInterval time.Duration
 }
 
 // NewEngine creates a new proxy Engine instance.
@@ -145,9 +160,10 @@ func NewEngine(cfg Config) *Engine {
 		cfg.DownloadDir = "./downloads"
 	}
 	return &Engine{
-		cfg:      cfg,
-		nodes:    make(map[string]*Node),
-		lastCalc: time.Now(),
+		cfg:           cfg,
+		nodes:         make(map[string]*Node),
+		lastCalc:      time.Now(),
+		probeInterval: 15 * time.Second,
 		progress: TransferProgress{
 			Status: "IDLE",
 		},
@@ -166,7 +182,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.cancel = cancel
 	e.running = true
 
-	// Add self node
+	// Add self node (initial state ONLINE, will be verified by probeLoop)
 	selfIP := ResolveAdvertiseIP(e.cfg.Advertise)
 	selfID := fmt.Sprintf("%s@%s:%d", e.cfg.Hostname, selfIP, e.cfg.ServerPort)
 	selfNode := &Node{
@@ -175,7 +191,7 @@ func (e *Engine) Start(ctx context.Context) error {
 		IP:       selfIP,
 		Port:     e.cfg.ServerPort,
 		Role:     "Both",
-		Status:   "ONLINE",
+		Status:   NodeStatusOnline,
 		LastSeen: time.Now(),
 		IsMe:     true,
 	}
@@ -226,6 +242,9 @@ func (e *Engine) Start(ctx context.Context) error {
 
 	// Speed calculation loop
 	go e.speedLoop(ctx)
+
+	// Internet access probe loop
+	go e.probeLoop(ctx)
 
 	return nil
 }
@@ -365,14 +384,19 @@ func (e *Engine) UpdateNode(node *Node) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	status := node.Status
+	if status == "" {
+		status = NodeStatusOnline
+	}
+
 	if existing, ok := e.nodes[node.ID]; ok {
 		existing.Hostname = node.Hostname
 		existing.IP = node.IP
 		existing.Port = node.Port
-		existing.Status = "ONLINE"
+		existing.Status = status
 		existing.LastSeen = time.Now()
 	} else {
-		node.Status = "ONLINE"
+		node.Status = status
 		node.LastSeen = time.Now()
 		e.nodes[node.ID] = node
 	}
@@ -384,7 +408,7 @@ func (e *Engine) RemoveNode(id string) {
 	defer e.mu.Unlock()
 
 	if n, ok := e.nodes[id]; ok {
-		n.Status = "OFFLINE"
+		n.Status = NodeStatusOffline
 	}
 }
 
@@ -487,7 +511,7 @@ func (e *Engine) selectNode() (*Node, error) {
 
 	var onlineNodes []*Node
 	for _, n := range e.nodes {
-		if n.Status == "ONLINE" && n.Port > 0 {
+		if n.Status == NodeStatusOnline && n.Port > 0 {
 			onlineNodes = append(onlineNodes, n)
 		}
 	}
@@ -495,6 +519,11 @@ func (e *Engine) selectNode() (*Node, error) {
 	if len(onlineNodes) == 0 {
 		return nil, fmt.Errorf("no available online nodes")
 	}
+
+	// Deterministic sort by ID to ensure stable round-robin distribution
+	sort.Slice(onlineNodes, func(i, j int) bool {
+		return onlineNodes[i].ID < onlineNodes[j].ID
+	})
 
 	idx := atomic.AddUint64(&e.rrIndex, 1) - 1
 	return onlineNodes[idx%uint64(len(onlineNodes))], nil
@@ -544,9 +573,16 @@ func (e *Engine) handleServerConn(conn net.Conn) {
 
 	targetConn, err := net.DialTimeout("tcp", hdr.Host, 10*time.Second)
 	if err != nil {
+		if meNode != nil {
+			atomic.AddUint64(&meNode.FailConns, 1)
+		}
 		return
 	}
 	defer targetConn.Close()
+
+	if meNode != nil {
+		atomic.AddUint64(&meNode.SuccessConns, 1)
+	}
 
 	e.relayServerWithStats(conn, multiReader, targetConn, meNode)
 }
@@ -772,81 +808,7 @@ func (e *Engine) relayServerWithStats(conn net.Conn, connReader io.Reader, targe
 	wg.Wait()
 }
 
-// Client Side: Accept SOCKS5 proxy connections
-func (e *Engine) acceptClient(l net.Listener) {
-	for {
-		conn, err := l.Accept()
-		if err != nil {
-			return
-		}
-		go e.handleSocks5Conn(conn)
-	}
-}
-
-func (e *Engine) handleSocks5Conn(conn net.Conn) {
-	defer conn.Close()
-
-	// 1. SOCKS5 Handshake
-	buf := make([]byte, 256)
-	if _, err := io.ReadFull(conn, buf[:2]); err != nil {
-		return
-	}
-	if buf[0] != 0x05 { // VER
-		return
-	}
-	nmethods := int(buf[1])
-	if _, err := io.ReadFull(conn, buf[:nmethods]); err != nil {
-		return
-	}
-	// NO AUTHENTICATION REQUIRED
-	if _, err := conn.Write([]byte{0x05, 0x00}); err != nil {
-		return
-	}
-
-	// 2. SOCKS5 Request
-	if _, err := io.ReadFull(conn, buf[:4]); err != nil {
-		return
-	}
-	cmd := buf[1]
-	addrType := buf[3]
-
-	if cmd != 0x01 { // CONNECT
-		conn.Write([]byte{0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0}) // Command not supported
-		return
-	}
-
-	var host string
-	switch addrType {
-	case 0x01: // IPv4
-		if _, err := io.ReadFull(conn, buf[:4]); err != nil {
-			return
-		}
-		host = net.IP(buf[:4]).String()
-	case 0x03: // Domain name
-		if _, err := io.ReadFull(conn, buf[:1]); err != nil {
-			return
-		}
-		domainLen := int(buf[0])
-		if _, err := io.ReadFull(conn, buf[:domainLen]); err != nil {
-			return
-		}
-		host = string(buf[:domainLen])
-	case 0x04: // IPv6
-		if _, err := io.ReadFull(conn, buf[:16]); err != nil {
-			return
-		}
-		host = net.IP(buf[:16]).String()
-	default:
-		return
-	}
-
-	if _, err := io.ReadFull(conn, buf[:2]); err != nil {
-		return
-	}
-	port := int(buf[0])<<8 | int(buf[1])
-	targetHost := net.JoinHostPort(host, strconv.Itoa(port))
-
-	// Select node to proxy with automatic failover retry
+func (e *Engine) dialTargetNode() (*Node, net.Conn, error) {
 	var serverConn net.Conn
 	var node *Node
 
@@ -862,10 +824,11 @@ func (e *Engine) handleSocks5Conn(conn net.Conn) {
 		}
 
 		dialConn, err := net.DialTimeout("tcp", nodeAddr, 2*time.Second)
-		if err != nil && selected.IP != "127.0.0.1" {
+		if err != nil && selected.IP != "127.0.0.1" && selected.IsMe {
 			dialConn, err = net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", selected.Port), 2*time.Second)
 		}
 		if err != nil {
+			atomic.AddUint64(&selected.FailConns, 1)
 			e.RemoveNode(selected.ID)
 			continue
 		}
@@ -875,12 +838,108 @@ func (e *Engine) handleSocks5Conn(conn net.Conn) {
 	}
 
 	if serverConn == nil || node == nil {
+		return nil, nil, fmt.Errorf("no available online nodes to connect")
+	}
+	return node, serverConn, nil
+}
+
+// Client Side: Accept SOCKS5 & HTTP hybrid proxy connections
+func (e *Engine) acceptClient(l net.Listener) {
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+		go e.handleClientConn(conn)
+	}
+}
+
+func (e *Engine) handleClientConn(conn net.Conn) {
+	reader := bufio.NewReader(conn)
+	peek, err := reader.Peek(1)
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
+
+	if peek[0] == 0x05 {
+		e.handleSocks5Conn(conn, reader)
+	} else {
+		e.handleHttpProxyConn(conn, reader)
+	}
+}
+
+func (e *Engine) handleSocks5Conn(conn net.Conn, reader *bufio.Reader) {
+	defer conn.Close()
+
+	// 1. SOCKS5 Handshake
+	buf := make([]byte, 256)
+	if _, err := io.ReadFull(reader, buf[:2]); err != nil {
+		return
+	}
+	if buf[0] != 0x05 { // VER
+		return
+	}
+	nmethods := int(buf[1])
+	if _, err := io.ReadFull(reader, buf[:nmethods]); err != nil {
+		return
+	}
+	// NO AUTHENTICATION REQUIRED
+	if _, err := conn.Write([]byte{0x05, 0x00}); err != nil {
+		return
+	}
+
+	// 2. SOCKS5 Request
+	if _, err := io.ReadFull(reader, buf[:4]); err != nil {
+		return
+	}
+	cmd := buf[1]
+	addrType := buf[3]
+
+	if cmd != 0x01 { // CONNECT
+		conn.Write([]byte{0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0}) // Command not supported
+		return
+	}
+
+	var host string
+	switch addrType {
+	case 0x01: // IPv4
+		if _, err := io.ReadFull(reader, buf[:4]); err != nil {
+			return
+		}
+		host = net.IP(buf[:4]).String()
+	case 0x03: // Domain name
+		if _, err := io.ReadFull(reader, buf[:1]); err != nil {
+			return
+		}
+		domainLen := int(buf[0])
+		if _, err := io.ReadFull(reader, buf[:domainLen]); err != nil {
+			return
+		}
+		host = string(buf[:domainLen])
+	case 0x04: // IPv6
+		if _, err := io.ReadFull(reader, buf[:16]); err != nil {
+			return
+		}
+		host = net.IP(buf[:16]).String()
+	default:
+		return
+	}
+
+	if _, err := io.ReadFull(reader, buf[:2]); err != nil {
+		return
+	}
+	port := int(buf[0])<<8 | int(buf[1])
+	targetHost := net.JoinHostPort(host, strconv.Itoa(port))
+
+	node, serverConn, err := e.dialTargetNode()
+	if err != nil {
 		conn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return
 	}
 	defer serverConn.Close()
 
-	fmt.Printf("[MOPS PROXY] Selected Node [%s] (%s:%d) for target [%s]\n", node.Hostname, node.IP, node.Port, targetHost)
+	fmt.Printf("[MOPS PROXY SOCKS5] Selected Node [%s] (%s:%d) for target [%s]\n", node.Hostname, node.IP, node.Port, targetHost)
 
 	// Send Header
 	hdr := Header{
@@ -893,6 +952,7 @@ func (e *Engine) handleSocks5Conn(conn net.Conn) {
 	hdrBytes = append(hdrBytes, '\n')
 
 	if _, err := serverConn.Write(hdrBytes); err != nil {
+		atomic.AddUint64(&node.FailConns, 1)
 		conn.Write([]byte{0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return
 	}
@@ -903,11 +963,189 @@ func (e *Engine) handleSocks5Conn(conn net.Conn) {
 	}
 
 	// Update node stats
+	atomic.AddUint64(&node.SuccessConns, 1)
 	atomic.AddInt64(&node.ActiveConn, 1)
 	defer atomic.AddInt64(&node.ActiveConn, -1)
 
 	// Relay traffic and record bytes
 	e.relayWithStats(conn, serverConn, node)
+}
+
+func (e *Engine) handleHttpProxyConn(conn net.Conn, reader *bufio.Reader) {
+	defer conn.Close()
+
+	// Read first line (Request Line)
+	reqLine, err := reader.ReadString('\n')
+	if err != nil {
+		return
+	}
+
+	parts := strings.Fields(reqLine)
+	if len(parts) < 2 {
+		return
+	}
+
+	method := strings.ToUpper(parts[0])
+	rawURL := parts[1]
+
+	var targetHost string
+	var initialPayload []byte
+
+	if method == "CONNECT" {
+		// HTTPS Tunnel: CONNECT host:port HTTP/1.1
+		targetHost = rawURL
+		if !strings.Contains(targetHost, ":") {
+			targetHost = targetHost + ":443"
+		}
+
+		// Read & discard remaining HTTP headers up to empty line
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil || line == "\r\n" || line == "\n" {
+				break
+			}
+		}
+	} else {
+		// Plain HTTP: GET http://host:port/path HTTP/1.1
+		if strings.HasPrefix(rawURL, "http://") {
+			trimmed := strings.TrimPrefix(rawURL, "http://")
+			slashIdx := strings.Index(trimmed, "/")
+			if slashIdx != -1 {
+				targetHost = trimmed[:slashIdx]
+				parts[1] = trimmed[slashIdx:]
+			} else {
+				targetHost = trimmed
+				parts[1] = "/"
+			}
+		} else {
+			targetHost = rawURL
+		}
+
+		if !strings.Contains(targetHost, ":") {
+			targetHost = targetHost + ":80"
+		}
+
+		var headerBuf bytes.Buffer
+		headerBuf.WriteString(strings.Join(parts, " ") + "\r\n")
+
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				break
+			}
+			if strings.HasPrefix(strings.ToLower(line), "proxy-connection:") {
+				line = "Connection:" + strings.TrimPrefix(line, "Proxy-Connection:")
+			}
+			headerBuf.WriteString(line)
+			if line == "\r\n" || line == "\n" {
+				break
+			}
+		}
+		initialPayload = headerBuf.Bytes()
+	}
+
+	node, serverConn, err := e.dialTargetNode()
+	if err != nil {
+		if method == "CONNECT" {
+			_, _ = conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		} else {
+			_, _ = conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\n\r\nMOPS: No available nodes\r\n"))
+		}
+		return
+	}
+	defer serverConn.Close()
+
+	fmt.Printf("[MOPS PROXY HTTP] Selected Node [%s] (%s:%d) for target [%s]\n", node.Hostname, node.IP, node.Port, targetHost)
+
+	// Send MOPS tunnel Header
+	hdr := Header{
+		Version:    1,
+		Host:       targetHost,
+		ClientPort: e.cfg.ClientPort,
+		ClientHost: e.cfg.Hostname,
+	}
+	hdrBytes, _ := json.Marshal(hdr)
+	hdrBytes = append(hdrBytes, '\n')
+
+	if _, err := serverConn.Write(hdrBytes); err != nil {
+		atomic.AddUint64(&node.FailConns, 1)
+		_, _ = conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		return
+	}
+
+	if method == "CONNECT" {
+		// Reply 200 Connection Established to client
+		if _, err := conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+			return
+		}
+	} else {
+		// Write reconstructed initial HTTP request to server
+		if len(initialPayload) > 0 {
+			if _, err := serverConn.Write(initialPayload); err != nil {
+				return
+			}
+		}
+	}
+
+	// Update node stats
+	atomic.AddUint64(&node.SuccessConns, 1)
+	atomic.AddInt64(&node.ActiveConn, 1)
+	defer atomic.AddInt64(&node.ActiveConn, -1)
+
+	// Relay traffic
+	clientMultiReader := io.MultiReader(reader, conn)
+	e.relayHttpWithStats(conn, clientMultiReader, serverConn, node)
+}
+
+func (e *Engine) relayHttpWithStats(clientConn net.Conn, clientReader io.Reader, serverConn net.Conn, node *Node) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	closeBoth := func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	}
+
+	// client -> server (upload)
+	go func() {
+		defer wg.Done()
+		defer closeBoth()
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := clientReader.Read(buf)
+			if n > 0 {
+				atomic.AddUint64(&e.bytesUp, uint64(n))
+				atomic.AddUint64(&node.BytesUp, uint64(n))
+				if _, werr := serverConn.Write(buf[:n]); werr != nil {
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
+
+	// server -> client (download)
+	go func() {
+		defer wg.Done()
+		defer closeBoth()
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := serverConn.Read(buf)
+			if n > 0 {
+				atomic.AddUint64(&e.bytesDown, uint64(n))
+				atomic.AddUint64(&node.BytesDown, uint64(n))
+				if _, werr := clientConn.Write(buf[:n]); werr != nil {
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
+
+	wg.Wait()
 }
 
 func (e *Engine) relay(c1, c2 net.Conn) {
@@ -1024,5 +1262,112 @@ func (e *Engine) SetAdvertise(ip string) error {
 	e.mu.Unlock()
 
 	return SavePersistentConfig(cfgCopy)
+}
+
+// SetDiscovery links discovery service to engine for advertise control.
+func (e *Engine) SetDiscovery(d *Discovery) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.discovery = d
+}
+
+// SetProbeFunc overrides default internet access probe function for testing.
+func (e *Engine) SetProbeFunc(fn func() bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.probeFunc = fn
+}
+
+// SetProbeInterval sets the probe check interval (default 15s).
+func (e *Engine) SetProbeInterval(d time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.probeInterval = d
+}
+
+// DefaultInternetProbe checks external network connectivity via lightweight DNS port dials.
+// Priority: 223.5.5.5:53 (AliDNS, 2s timeout), fallback: 1.1.1.1:53 (Cloudflare DNS, 2s timeout).
+func DefaultInternetProbe() bool {
+	conn, err := net.DialTimeout("tcp", "223.5.5.5:53", 2*time.Second)
+	if err == nil {
+		_ = conn.Close()
+		return true
+	}
+	conn2, err := net.DialTimeout("tcp", "1.1.1.1:53", 2*time.Second)
+	if err == nil {
+		_ = conn2.Close()
+		return true
+	}
+	return false
+}
+
+func (e *Engine) checkInternet() bool {
+	e.mu.RLock()
+	fn := e.probeFunc
+	e.mu.RUnlock()
+
+	if fn != nil {
+		return fn()
+	}
+	return DefaultInternetProbe()
+}
+
+// TriggerProbe runs an immediate internet probe check.
+func (e *Engine) TriggerProbe() {
+	e.probeOnce()
+}
+
+func (e *Engine) probeOnce() {
+	hasInternet := e.checkInternet()
+
+	e.mu.Lock()
+	selfIP := ResolveAdvertiseIP(e.cfg.Advertise)
+	selfID := fmt.Sprintf("%s@%s:%d", e.cfg.Hostname, selfIP, e.cfg.ServerPort)
+	me, hasMe := e.nodes[selfID]
+	disc := e.discovery
+
+	if hasInternet {
+		if hasMe {
+			me.Status = NodeStatusOnline
+			me.LastSeen = time.Now()
+		}
+		e.mu.Unlock()
+		if disc != nil {
+			disc.ResumeAdvertise()
+		}
+	} else {
+		if hasMe {
+			me.Status = NodeStatusNoInternet
+			me.LastSeen = time.Now()
+		}
+		e.mu.Unlock()
+		if disc != nil {
+			disc.PauseAdvertise()
+		}
+	}
+}
+
+func (e *Engine) probeLoop(ctx context.Context) {
+	// Initial probe check
+	e.probeOnce()
+
+	e.mu.RLock()
+	interval := e.probeInterval
+	e.mu.RUnlock()
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			e.probeOnce()
+		}
+	}
 }
 

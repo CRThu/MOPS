@@ -71,31 +71,35 @@ bun tauri dev       # 启动 Tauri 2.0 桌面开发小窗
 
 ### 端口分配
 
-| 组件 | 参数 | 默认端口 |
-|------|------|----------|
-| Server TCP | `--server-port` | 10080 |
-| Client SOCKS5 | `--client-port` | 10081 |
-| RESTful API | `--api-port` | 10082 |
+| 组件 | 参数 | 默认端口 | 协议支持 |
+|------|------|----------|----------|
+| Server TCP | `--server-port` | 10080 | MOPS 隧道协议 |
+| Client 混合代理 | `--client-port` | 10081 | SOCKS5 / HTTP / HTTPS CONNECT 双模自适应 |
+| RESTful API | `--api-port` | 10082 | HTTP JSON |
 
 ---
 
 ## 代理协议与测试
 
-### curl 测试
+### curl 极速测试
 
 ```powershell
-# SOCKS5 代理请求
-curl.exe -x socks5://127.0.0.1:10081 https://ifconfig.me
+# 1. HTTP 代理方式请求
+curl.exe -x http://127.0.0.1:10081 https://httpbin.org/ip
+
+# 2. SOCKS5 代理方式请求
+curl.exe -x socks5://127.0.0.1:10081 https://httpbin.org/ip
 ```
 
 ---
 
-## 负载均衡与自动发现
+## 负载均衡与多通道加速
 
 | 特性 | 说明 |
 |------|------|
-| **Round-Robin** | 默认在所有 ONLINE 节点间加权轮询平摊流量 |
-| **mDNS 自动发现** | 基于 zeroconf 原生 Go 广播，无需手动配置 IP |
+| **严格确定性 Round-Robin** | 在所有 `ONLINE` 节点间按固定序列 1:1 交替轮询，平摊出口带宽 |
+| **mDNS 自动组网** | 基于 zeroconf 原生 Go 广播，自动发现并组建局域网多出口集群 |
+| **Chrome 一键多通道加速** | GUI 提供 Chrome 加速按钮，突破单长连接限制，自动吃满各节点带宽 |
 
 ---
 
