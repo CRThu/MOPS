@@ -26,23 +26,27 @@ type APIResponse struct {
 
 // StatusData defines payload for /api/v1/status endpoint.
 type StatusData struct {
-	Hostname      string          `json:"hostname"`
-	Strategy      string          `json:"strategy"`
-	ClientPort    int             `json:"client_port"`
-	ServerPort    int             `json:"server_port"`
-	APIPort       int             `json:"api_port"`
-	ClientEnabled bool            `json:"client_enabled"`
-	ServerEnabled bool            `json:"server_enabled"`
-	SystemProxy   SystemProxyInfo `json:"system_proxy"`
-	SpeedUp       float64         `json:"speed_up"`
-	SpeedDown     float64         `json:"speed_down"`
-	BytesUp       uint64          `json:"bytes_up"`
-	BytesDown     uint64          `json:"bytes_down"`
-	TotalNodes    int             `json:"total_nodes"`
-	OnlineNodes   int             `json:"online_nodes"`
-	DownloadDir   string          `json:"download_dir"`
-	Advertise     string          `json:"advertise"`
-	HasChrome     bool            `json:"has_chrome"`
+	Hostname        string          `json:"hostname"`
+	Strategy        string          `json:"strategy"`
+	ClientPort      int             `json:"client_port"`
+	ServerPort      int             `json:"server_port"`
+	APIPort         int             `json:"api_port"`
+	ClientEnabled   bool            `json:"client_enabled"`
+	ServerEnabled   bool            `json:"server_enabled"`
+	SystemProxy     SystemProxyInfo `json:"system_proxy"`
+	SpeedUp         float64         `json:"speed_up"`
+	SpeedDown       float64         `json:"speed_down"`
+	BytesUp         uint64          `json:"bytes_up"`
+	BytesDown       uint64          `json:"bytes_down"`
+	ServerSpeedUp   float64         `json:"server_speed_up"`
+	ServerSpeedDown float64         `json:"server_speed_down"`
+	ServerBytesUp   uint64          `json:"server_bytes_up"`
+	ServerBytesDown uint64          `json:"server_bytes_down"`
+	TotalNodes      int             `json:"total_nodes"`
+	OnlineNodes     int             `json:"online_nodes"`
+	DownloadDir     string          `json:"download_dir"`
+	Advertise       string          `json:"advertise"`
+	HasChrome       bool            `json:"has_chrome"`
 }
 
 // APIServer manages the RESTful HTTP API server.
@@ -105,12 +109,15 @@ func (a *APIServer) Start(port int, listenAddr string) error {
 	return nil
 }
 
-// Stop gracefully shuts down the API server.
+// Stop gracefully terminates the API server.
 func (a *APIServer) Stop() {
 	if a.server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = a.server.Shutdown(ctx)
+	}
+	if a.listener != nil {
+		_ = a.listener.Close()
 	}
 }
 
@@ -150,27 +157,32 @@ func (a *APIServer) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	speedUp, speedDown := a.engine.GetSpeed()
+	srvSpeedUp, srvSpeedDown, srvBytesUp, srvBytesDown := a.engine.GetServerSpeed()
 
 	sysProxyInfo, _ := GetSystemProxyInfo()
 
 	status := StatusData{
-		Hostname:      a.engine.cfg.Hostname,
-		Strategy:      a.engine.cfg.Strategy,
-		ClientPort:    a.engine.cfg.ClientPort,
-		ServerPort:    a.engine.cfg.ServerPort,
-		APIPort:       a.engine.cfg.APIPort,
-		ClientEnabled: a.engine.GetClientEnabled(),
-		ServerEnabled: a.engine.GetServerEnabled(),
-		SystemProxy:   sysProxyInfo,
-		SpeedUp:       speedUp,
-		SpeedDown:     speedDown,
-		BytesUp:       atomic.LoadUint64(&a.engine.bytesUp),
-		BytesDown:     atomic.LoadUint64(&a.engine.bytesDown),
-		TotalNodes:    len(nodes),
-		OnlineNodes:   onlineCount,
-		DownloadDir:   a.engine.GetDownloadDir(),
-		Advertise:     ResolveAdvertiseIP(a.engine.GetAdvertise()),
-		HasChrome:     FindChromePath() != "",
+		Hostname:        a.engine.cfg.Hostname,
+		Strategy:        a.engine.cfg.Strategy,
+		ClientPort:      a.engine.cfg.ClientPort,
+		ServerPort:      a.engine.cfg.ServerPort,
+		APIPort:         a.engine.cfg.APIPort,
+		ClientEnabled:   a.engine.GetClientEnabled(),
+		ServerEnabled:   a.engine.GetServerEnabled(),
+		SystemProxy:     sysProxyInfo,
+		SpeedUp:         speedUp,
+		SpeedDown:       speedDown,
+		BytesUp:         atomic.LoadUint64(&a.engine.bytesUp),
+		BytesDown:       atomic.LoadUint64(&a.engine.bytesDown),
+		ServerSpeedUp:   srvSpeedUp,
+		ServerSpeedDown: srvSpeedDown,
+		ServerBytesUp:   srvBytesUp,
+		ServerBytesDown: srvBytesDown,
+		TotalNodes:      len(nodes),
+		OnlineNodes:     onlineCount,
+		DownloadDir:     a.engine.GetDownloadDir(),
+		Advertise:       ResolveAdvertiseIP(a.engine.GetAdvertise()),
+		HasChrome:       FindChromePath() != "",
 	}
 
 	writeJSON(w, http.StatusOK, APIResponse{

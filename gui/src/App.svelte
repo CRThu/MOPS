@@ -143,7 +143,7 @@
         {/if}
       </div>
       <span class="font-bold text-slate-300">
-        {state?.isOnline ? '守护进程已连接' : '守护进程未连接'}
+        {state?.isOnline ? '已连接' : '未连接'}
       </span>
     </div>
 
@@ -162,7 +162,7 @@
 
       <div class="font-mono text-slate-500 flex items-center space-x-1">
         <span class="text-[9px] bg-slate-900 border border-slate-800 px-1.5 py-0.2 rounded text-slate-400">
-          v1.0.0
+          v1.6.0
         </span>
       </div>
     </div>

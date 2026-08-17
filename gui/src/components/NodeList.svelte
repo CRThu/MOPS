@@ -21,7 +21,20 @@
       val /= 1024;
       i++;
     }
-    return `${val.toFixed(3)} ${units[i]}`;
+    return `${val.toFixed(2)} ${units[i]}`;
+  }
+
+  function formatSpeed(bytesPerSec: number | undefined): string {
+    if (!bytesPerSec || bytesPerSec <= 0) return '0.0 KB/s';
+    const kb = bytesPerSec / 1024;
+    if (kb < 1024) {
+      return `${kb.toFixed(1)} KB/s`;
+    }
+    const mb = kb / 1024;
+    if (mb < 1024) {
+      return `${mb.toFixed(1)} MB/s`;
+    }
+    return `${(mb / 1024).toFixed(2)} GB/s`;
   }
 
   async function handleSendFile(node: NodeInfo) {
@@ -44,7 +57,7 @@
 
     <span class="text-[9px] text-emerald-300 font-mono bg-emerald-950/70 border border-emerald-500/30 px-1.5 py-0.2 rounded-full shadow-sm flex items-center space-x-1">
       <span class="w-1 h-1 rounded-full bg-emerald-400 animate-ping"></span>
-      <span>mDNS 发现</span>
+      <span>mDNS</span>
     </span>
   </div>
 
@@ -75,11 +88,11 @@
                   </span>
                   {#if node.is_me}
                     <span class="text-[8px] bg-blue-950/80 text-blue-300 border border-blue-600/40 px-1 py-0.2 rounded font-mono shrink-0 shadow-sm">
-                      本机 / Local
+                      local
                     </span>
                   {:else}
                     <span class="text-[8px] bg-emerald-950/80 text-emerald-300 border border-emerald-600/40 px-1 py-0.2 rounded font-mono shrink-0 shadow-sm">
-                      Peer 节点
+                      peer
                     </span>
                   {/if}
                 </div>
@@ -120,12 +133,20 @@
             </div>
           </div>
 
-          <!-- Bottom Row: Simple Stats (active/success/fail | bytes up/down) -->
+          <!-- Bottom Row: Realtime Speed & Stats & Total Traffic -->
           <div class="text-[9px] font-mono text-slate-400 flex items-center justify-between border-t border-white/5 pt-1 px-0.5">
-            <span>
-              {node.active_conns || 0}/{node.success_conns || 0}/{node.fail_conns || 0}
+            <span class="text-slate-400 font-mono flex items-center space-x-0.5" title="连接统计: 活跃 / 成功 / 失败">
+              <span class="text-slate-500 font-semibold">conn:</span>
+              <span class="text-blue-400 font-bold">{node.active_conns || 0}</span>
+              <span class="text-slate-600">/</span>
+              <span class="text-emerald-400 font-bold">{node.success_conns || 0}</span>
+              <span class="text-slate-600">/</span>
+              <span class="text-rose-400 font-bold">{node.fail_conns || 0}</span>
             </span>
-            <span>
+            <span class="text-emerald-400 font-semibold px-1 py-0.2 bg-emerald-950/40 rounded border border-emerald-500/20 shadow-sm">
+              ↑ {formatSpeed(node.speed_up)} ↓ {formatSpeed(node.speed_down)}
+            </span>
+            <span class="text-slate-400">
               ↑ {formatBytes(node.bytes_up)} | ↓ {formatBytes(node.bytes_down)}
             </span>
           </div>

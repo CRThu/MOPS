@@ -157,12 +157,8 @@ func TestEndToEndMultiNodeLoadBalancing(t *testing.T) {
 	// Verify all requests succeeded
 	assert.Equal(t, int64(numRequests), atomic.LoadInt64(&destHits))
 
-	// Verify node traffic counters updated
-	nodes := engClient.GetNodes()
-	var totalBytes uint64
-	for _, n := range nodes {
-		totalBytes += n.BytesUp + n.BytesDown
-	}
+	// Verify client traffic counters updated
+	totalBytes := atomic.LoadUint64(&engClient.bytesUp) + atomic.LoadUint64(&engClient.bytesDown)
 	assert.Greater(t, totalBytes, uint64(0))
 
 	// 6. Test Real Node Shutdown & Automatic Failover
@@ -467,12 +463,15 @@ func TestEndToEndCurlHttpAndSocks5Proxy(t *testing.T) {
 	}
 
 	// Verify both servers processed requests evenly (3 each out of 6)
-	nodes := engClient.GetNodes()
-	for _, n := range nodes {
-		if n.ID == "node-s1" {
+	nodes1 := engS1.GetNodes()
+	for _, n := range nodes1 {
+		if n.IsMe {
 			s1Hits = int64(n.SuccessConns)
 		}
-		if n.ID == "node-s2" {
+	}
+	nodes2 := engS2.GetNodes()
+	for _, n := range nodes2 {
+		if n.IsMe {
 			s2Hits = int64(n.SuccessConns)
 		}
 	}

@@ -165,6 +165,7 @@ func (d *Discovery) registerServerLocked() {
 		"id=" + nodeID,
 		"hostname=" + d.engine.cfg.Hostname,
 		"port=" + strconv.Itoa(d.engine.cfg.ServerPort),
+		"api_port=" + strconv.Itoa(d.engine.cfg.APIPort),
 		"role=Server",
 	}
 
@@ -267,6 +268,13 @@ func parseServiceEntry(entry *zeroconf.ServiceEntry) *Node {
 		}
 	}
 
+	apiPort := 0
+	if apStr, ok := txtMap["api_port"]; ok {
+		if ap, err := strconv.Atoi(apStr); err == nil {
+			apiPort = ap
+		}
+	}
+
 	ip := ""
 	if len(entry.AddrIPv4) > 0 {
 		for _, addrIPv4 := range entry.AddrIPv4 {
@@ -305,6 +313,7 @@ func parseServiceEntry(entry *zeroconf.ServiceEntry) *Node {
 		Hostname: hostname,
 		IP:       ip,
 		Port:     port,
+		APIPort:  apiPort,
 		Role:     txtMap["role"],
 		Status:   "ONLINE",
 		LastSeen: time.Now(),

@@ -60,16 +60,32 @@
     isLaunchingChrome = false;
   }
 
-  function formatSpeed(bytesPerSec: number | undefined): string {
-    if (!bytesPerSec || bytesPerSec <= 0) return '0.0 B/s';
-    const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+  $: totalClusterSpeedUp = ($mopsStore.nodes || []).reduce((acc, cur) => acc + (cur.speed_up || 0), 0);
+  $: totalClusterSpeedDown = ($mopsStore.nodes || []).reduce((acc, cur) => acc + (cur.speed_down || 0), 0);
+
+  function formatBytes(bytes: number | undefined): string {
+    if (!bytes || bytes <= 0) return '0.0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
     let i = 0;
-    let val = bytesPerSec;
+    let val = bytes;
     while (val >= 1024 && i < units.length - 1) {
       val /= 1024;
       i++;
     }
     return `${val.toFixed(1)} ${units[i]}`;
+  }
+
+  function formatSpeed(bytesPerSec: number | undefined): string {
+    if (!bytesPerSec || bytesPerSec <= 0) return '0.0 KB/s';
+    const kb = bytesPerSec / 1024;
+    if (kb < 1024) {
+      return `${kb.toFixed(1)} KB/s`;
+    }
+    const mb = kb / 1024;
+    if (mb < 1024) {
+      return `${mb.toFixed(2)} MB/s`;
+    }
+    return `${(mb / 1024).toFixed(2)} GB/s`;
   }
 </script>
 
@@ -152,27 +168,33 @@
     <!-- Speed Board -->
     <div class="grid grid-cols-2 gap-2 pb-2 border-b border-slate-800/80">
       <!-- Upload Speed -->
-      <div class="flex items-center space-x-2 bg-slate-900/70 p-2 rounded-lg border border-slate-800/80 shadow-sm">
+      <div class="flex items-center space-x-2 bg-slate-900/70 p-2 rounded-lg border border-slate-800/80 shadow-sm min-w-0">
         <div class="p-1 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 shrink-0">
           <ArrowUpRight class="w-3 h-3" />
         </div>
-        <div class="min-w-0">
+        <div class="min-w-0 flex-1">
           <div class="text-[8px] text-slate-400 uppercase tracking-widest font-semibold">上行 UPLOAD</div>
           <div class="text-[11px] font-bold font-mono text-slate-100 truncate tracking-tight">
             {formatSpeed(status?.speed_up)}
+          </div>
+          <div class="text-[10px] text-slate-400 font-mono font-medium truncate mt-0.5" title="集群所有服务端节点总上行速率">
+            {formatSpeed(totalClusterSpeedUp)}
           </div>
         </div>
       </div>
 
       <!-- Download Speed -->
-      <div class="flex items-center space-x-2 bg-slate-900/70 p-2 rounded-lg border border-slate-800/80 shadow-sm">
+      <div class="flex items-center space-x-2 bg-slate-900/70 p-2 rounded-lg border border-slate-800/80 shadow-sm min-w-0">
         <div class="p-1 rounded bg-blue-500/10 border border-blue-500/20 text-blue-400 shrink-0">
           <ArrowDownLeft class="w-3 h-3" />
         </div>
-        <div class="min-w-0">
+        <div class="min-w-0 flex-1">
           <div class="text-[8px] text-slate-400 uppercase tracking-widest font-semibold">下行 DOWNLOAD</div>
           <div class="text-[11px] font-bold font-mono text-slate-100 truncate tracking-tight">
             {formatSpeed(status?.speed_down)}
+          </div>
+          <div class="text-[10px] text-slate-400 font-mono font-medium truncate mt-0.5" title="集群所有服务端节点总下行速率">
+            {formatSpeed(totalClusterSpeedDown)}
           </div>
         </div>
       </div>

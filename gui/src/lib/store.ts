@@ -57,7 +57,7 @@ function createMopsStore() {
     }
   }
 
-  function startPolling(intervalMs = 1500) {
+  function startPolling(intervalMs = 1000) {
     fetchState();
     if (!timer) {
       timer = setInterval(fetchState, intervalMs);

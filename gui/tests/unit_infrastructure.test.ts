@@ -58,6 +58,7 @@ describe('Infrastructure Layer - ApiClient Unit Tests', () => {
       hostname: 'Node1',
       ip: '192.168.1.100',
       port: 10080,
+      api_port: 10082,
       role: 'Server',
       status: 'ONLINE',
       active_conns: 5,
@@ -65,6 +66,8 @@ describe('Infrastructure Layer - ApiClient Unit Tests', () => {
       fail_conns: 2,
       bytes_up: 5242880,
       bytes_down: 104857600,
+      speed_up: 5120,
+      speed_down: 10240,
       last_seen: new Date().toISOString(),
       is_me: false,
     };
@@ -81,6 +84,9 @@ describe('Infrastructure Layer - ApiClient Unit Tests', () => {
     expect(nodes[0].fail_conns).toBe(2);
     expect(nodes[0].bytes_up).toBe(5242880);
     expect(nodes[0].bytes_down).toBe(104857600);
+    expect(nodes[0].speed_up).toBe(5120);
+    expect(nodes[0].speed_down).toBe(10240);
+    expect(nodes[0].api_port).toBe(10082);
     expect(nodes[0].status).toBe('ONLINE');
   });
 

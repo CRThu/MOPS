@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -1218,6 +1219,215 @@ func TestMultiNodeFailoverWhenRemoteOutboundFails(t *testing.T) {
 		}
 	}
 }
+
+func TestNodeAutoRecoveryFromOffline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 1. Create a dummy TCP server representing remote node
+	remoteListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	remotePort := remoteListener.Addr().(*net.TCPAddr).Port
+
+	// 2. Engine
+	eng := NewEngine(Config{
+		ServerPort: 10980,
+		ClientPort: 10981,
+		Hostname:   "AutoRecoveryMaster",
+		Advertise:  "127.0.0.1",
+	})
+	require.NoError(t, eng.Start(ctx))
+	defer eng.Stop()
+
+	// Register remote node as initially OFFLINE
+	remoteNode := &Node{
+		ID:       fmt.Sprintf("RemoteNode@127.0.0.1:%d", remotePort),
+		Hostname: "RemoteServer",
+		IP:       "127.0.0.1",
+		Port:     remotePort,
+		Status:   NodeStatusOffline,
+		LastSeen: time.Now().Add(-1 * time.Hour),
+	}
+	eng.UpdateNode(remoteNode)
+	eng.RemoveNode(remoteNode.ID)
+
+	// Verify it is OFFLINE
+	eng.mu.RLock()
+	assert.Equal(t, NodeStatusOffline, eng.nodes[remoteNode.ID].Status)
+	eng.mu.RUnlock()
+
+	// 3. Trigger checkAndSyncNodes
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	eng.checkAndSyncNodes(client)
+
+	// 4. Node should now be AUTO-RECOVERED to ONLINE
+	eng.mu.RLock()
+	assert.Equal(t, NodeStatusOnline, eng.nodes[remoteNode.ID].Status)
+	eng.mu.RUnlock()
+
+	_ = remoteListener.Close()
+}
+
+func TestClusterMetricsAndSpeedSync(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// NodeA (Server with API)
+	engA := NewEngine(Config{
+		ServerPort: 10982,
+		ClientPort: 10983,
+		APIPort:    10984,
+		Hostname:   "ServerNodeA",
+		Advertise:  "127.0.0.1",
+	})
+	require.NoError(t, engA.Start(ctx))
+	defer engA.Stop()
+
+	// Simulate server provider traffic on NodeA
+	atomic.StoreUint64(&engA.serverBytesUp, 102400)
+	atomic.StoreUint64(&engA.serverBytesDown, 204800)
+	engA.mu.Lock()
+	engA.serverSpeedUp = 5120.0
+	engA.serverSpeedDown = 10240.0
+	engA.mu.Unlock()
+
+	// NodeB (Client)
+	engB := NewEngine(Config{
+		ServerPort: 10985,
+		ClientPort: 10986,
+		APIPort:    10987,
+		Hostname:   "ClientNodeB",
+		Advertise:  "127.0.0.1",
+	})
+	require.NoError(t, engB.Start(ctx))
+	defer engB.Stop()
+
+	// Register NodeA on NodeB
+	engB.UpdateNode(&Node{
+		ID:       "ServerNodeA@127.0.0.1:10982",
+		Hostname: "ServerNodeA",
+		IP:       "127.0.0.1",
+		Port:     10982,
+		APIPort:  10984,
+		Status:   NodeStatusOnline,
+	})
+
+	// Trigger metrics sync on NodeB
+	client := &http.Client{Timeout: 1 * time.Second}
+	engB.checkAndSyncNodes(client)
+
+	// Verify NodeB has received NodeA's actual server traffic & speed
+	nodesOnB := engB.GetNodes()
+	var syncedA *Node
+	for _, n := range nodesOnB {
+		if n.ID == "ServerNodeA@127.0.0.1:10982" {
+			syncedA = n
+			break
+		}
+	}
+	require.NotNil(t, syncedA)
+	assert.Equal(t, uint64(102400), syncedA.BytesUp)
+	assert.Equal(t, uint64(204800), syncedA.BytesDown)
+	assert.Equal(t, 5120.0, syncedA.SpeedUp)
+	assert.Equal(t, 10240.0, syncedA.SpeedDown)
+}
+
+func TestSelfNodeDisplaysServerMetrics(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng := NewEngine(Config{
+		ServerPort: 10988,
+		ClientPort: 10989,
+		Hostname:   "SelfMetricsTestNode",
+		Advertise:  "127.0.0.1",
+	})
+	require.NoError(t, eng.Start(ctx))
+	defer eng.Stop()
+
+	// Simulate client outbound proxy traffic
+	atomic.StoreUint64(&eng.bytesUp, 99999)
+	atomic.StoreUint64(&eng.bytesDown, 88888)
+	eng.mu.Lock()
+	eng.speedUp = 777.0
+	eng.speedDown = 666.0
+	// Server provider traffic is 0
+	eng.serverSpeedUp = 0.0
+	eng.serverSpeedDown = 0.0
+	eng.mu.Unlock()
+
+	nodes := eng.GetNodes()
+	var selfNode *Node
+	for _, n := range nodes {
+		if n.IsMe {
+			selfNode = n
+			break
+		}
+	}
+	require.NotNil(t, selfNode)
+	// Self node in node list should reflect Server stats (0), not Client stats (99999)
+	assert.Equal(t, uint64(0), selfNode.BytesUp)
+	assert.Equal(t, uint64(0), selfNode.BytesDown)
+	assert.Equal(t, 0.0, selfNode.SpeedUp)
+	assert.Equal(t, 0.0, selfNode.SpeedDown)
+}
+
+func TestConcurrentCheckAndSyncNodes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 1. Live TCP Node
+	liveListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer liveListener.Close()
+	livePort := liveListener.Addr().(*net.TCPAddr).Port
+
+	// 2. Engine
+	eng := NewEngine(Config{
+		ServerPort: 10990,
+		ClientPort: 10991,
+		Hostname:   "ConcurrentMaster",
+		Advertise:  "127.0.0.1",
+	})
+	require.NoError(t, eng.Start(ctx))
+	defer eng.Stop()
+
+	// Register 1 Live node (marked offline) and 2 Dead nodes (marked online)
+	eng.UpdateNode(&Node{
+		ID:       fmt.Sprintf("LiveNode@127.0.0.1:%d", livePort),
+		Hostname: "LiveNode",
+		IP:       "127.0.0.1",
+		Port:     livePort,
+		Status:   NodeStatusOffline,
+	})
+	eng.UpdateNode(&Node{
+		ID:       "DeadNode1@127.0.0.1:59991",
+		Hostname: "DeadNode1",
+		IP:       "127.0.0.1",
+		Port:     59991,
+		Status:   NodeStatusOnline,
+	})
+	eng.UpdateNode(&Node{
+		ID:       "DeadNode2@127.0.0.1:59992",
+		Hostname: "DeadNode2",
+		IP:       "127.0.0.1",
+		Port:     59992,
+		Status:   NodeStatusOnline,
+	})
+
+	// Concurrent probe
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	eng.checkAndSyncNodes(client)
+
+	// Verify states
+	eng.mu.RLock()
+	assert.Equal(t, NodeStatusOnline, eng.nodes[fmt.Sprintf("LiveNode@127.0.0.1:%d", livePort)].Status, "Live node should be restored to ONLINE")
+	assert.Equal(t, NodeStatusOffline, eng.nodes["DeadNode1@127.0.0.1:59991"].Status, "Dead node 1 should become OFFLINE")
+	assert.Equal(t, NodeStatusOffline, eng.nodes["DeadNode2@127.0.0.1:59992"].Status, "Dead node 2 should become OFFLINE")
+	eng.mu.RUnlock()
+}
+
+
 
 
 

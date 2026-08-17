@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -51,6 +52,7 @@ type Node struct {
 	Hostname     string    `json:"hostname"`
 	IP           string    `json:"ip"`
 	Port         int       `json:"port"`
+	APIPort      int       `json:"api_port"`
 	Role         string    `json:"role"`
 	Status       string    `json:"status"`
 	ActiveConn   int64     `json:"active_conns"`
@@ -58,6 +60,8 @@ type Node struct {
 	FailConns    uint64    `json:"fail_conns"`
 	BytesUp      uint64    `json:"bytes_up"`
 	BytesDown    uint64    `json:"bytes_down"`
+	SpeedUp      float64   `json:"speed_up"`
+	SpeedDown    float64   `json:"speed_down"`
 	LastSeen     time.Time `json:"last_seen"`
 	IsMe         bool      `json:"is_me"`
 }
@@ -103,16 +107,26 @@ type Engine struct {
 
 	rrIndex uint64 // Round-Robin counter
 
-	// Traffic stats
+	// Client Outbound Traffic stats
 	bytesUp   uint64
 	bytesDown uint64
 
-	// Real-time speed calculation
+	// Client Outbound Speed calculation
 	speedUp   float64
 	speedDown float64
 	lastUp    uint64
 	lastDown  uint64
 	lastCalc  time.Time
+
+	// Server Provider Traffic stats (as a proxy provider)
+	serverBytesUp   uint64
+	serverBytesDown uint64
+
+	// Server Provider Speed calculation
+	serverSpeedUp   float64
+	serverSpeedDown float64
+	lastServerUp    uint64
+	lastServerDown  uint64
 
 	// Active file transfer progress
 	progress TransferProgress
@@ -191,6 +205,7 @@ func (e *Engine) Start(ctx context.Context) error {
 		Hostname: e.cfg.Hostname,
 		IP:       selfIP,
 		Port:     e.cfg.ServerPort,
+		APIPort:  e.cfg.APIPort,
 		Role:     "Both",
 		Status:   NodeStatusOnline,
 		LastSeen: time.Now(),
@@ -246,6 +261,9 @@ func (e *Engine) Start(ctx context.Context) error {
 
 	// Internet access probe loop
 	go e.probeLoop(ctx)
+
+	// Node health check and cluster metrics sync loop
+	go e.nodeHealthLoop(ctx)
 
 	return nil
 }
@@ -394,6 +412,12 @@ func (e *Engine) UpdateNode(node *Node) {
 		existing.Hostname = node.Hostname
 		existing.IP = node.IP
 		existing.Port = node.Port
+		if node.APIPort > 0 {
+			existing.APIPort = node.APIPort
+		}
+		if node.Role != "" {
+			existing.Role = node.Role
+		}
 		existing.Status = status
 		existing.LastSeen = time.Now()
 	} else {
@@ -421,6 +445,12 @@ func (e *Engine) GetNodes() []*Node {
 	res := make([]*Node, 0, len(e.nodes))
 	for _, n := range e.nodes {
 		nodeCopy := *n
+		if nodeCopy.IsMe {
+			nodeCopy.BytesUp = atomic.LoadUint64(&e.serverBytesUp)
+			nodeCopy.BytesDown = atomic.LoadUint64(&e.serverBytesDown)
+			nodeCopy.SpeedUp = e.serverSpeedUp
+			nodeCopy.SpeedDown = e.serverSpeedDown
+		}
 		res = append(res, &nodeCopy)
 	}
 
@@ -444,11 +474,18 @@ func (e *Engine) GetAdvertiseIP() string {
 	return e.cfg.Advertise
 }
 
-// GetSpeed returns current total speed up/down (bytes/s).
+// GetSpeed returns current client outbound proxy speed up/down (bytes/s).
 func (e *Engine) GetSpeed() (float64, float64) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.speedUp, e.speedDown
+}
+
+// GetServerSpeed returns current server provider speed up/down (bytes/s) and total bytes up/down.
+func (e *Engine) GetServerSpeed() (float64, float64, uint64, uint64) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.serverSpeedUp, e.serverSpeedDown, atomic.LoadUint64(&e.serverBytesUp), atomic.LoadUint64(&e.serverBytesDown)
 }
 
 // SetDownloadDir dynamically updates the file download save directory.
@@ -625,7 +662,7 @@ func (e *Engine) handleIncomingFile(reader io.Reader, hdr Header, meNode *Node) 
 		n, err := limitReader.Read(buf)
 		if n > 0 {
 			transferred += int64(n)
-			atomic.AddUint64(&e.bytesDown, uint64(n))
+			atomic.AddUint64(&e.serverBytesDown, uint64(n))
 			if meNode != nil {
 				atomic.AddUint64(&meNode.BytesDown, uint64(n))
 			}
@@ -792,7 +829,7 @@ func (e *Engine) relayServerWithStats(conn net.Conn, connReader io.Reader, targe
 		for {
 			n, err := connReader.Read(buf)
 			if n > 0 {
-				atomic.AddUint64(&e.bytesUp, uint64(n))
+				atomic.AddUint64(&e.serverBytesUp, uint64(n))
 				if meNode != nil {
 					atomic.AddUint64(&meNode.BytesUp, uint64(n))
 				}
@@ -814,7 +851,7 @@ func (e *Engine) relayServerWithStats(conn net.Conn, connReader io.Reader, targe
 		for {
 			n, err := targetConn.Read(buf)
 			if n > 0 {
-				atomic.AddUint64(&e.bytesDown, uint64(n))
+				atomic.AddUint64(&e.serverBytesDown, uint64(n))
 				if meNode != nil {
 					atomic.AddUint64(&meNode.BytesDown, uint64(n))
 				}
@@ -829,6 +866,111 @@ func (e *Engine) relayServerWithStats(conn net.Conn, connReader io.Reader, targe
 	}()
 
 	wg.Wait()
+}
+
+func (e *Engine) relay(c1, c2 net.Conn) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	closeBoth := func() {
+		_ = c1.Close()
+		_ = c2.Close()
+	}
+	go func() {
+		defer wg.Done()
+		defer closeBoth()
+		io.Copy(c1, c2)
+	}()
+	go func() {
+		defer wg.Done()
+		defer closeBoth()
+		io.Copy(c2, c1)
+	}()
+	wg.Wait()
+}
+
+func (e *Engine) relayWithStats(clientConn, serverConn net.Conn, node *Node) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	closeBoth := func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	}
+
+	// client -> server (upload)
+	go func() {
+		defer wg.Done()
+		defer closeBoth()
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := clientConn.Read(buf)
+			if n > 0 {
+				atomic.AddUint64(&e.bytesUp, uint64(n))
+				if _, werr := serverConn.Write(buf[:n]); werr != nil {
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
+
+	// server -> client (download)
+	go func() {
+		defer wg.Done()
+		defer closeBoth()
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := serverConn.Read(buf)
+			if n > 0 {
+				atomic.AddUint64(&e.bytesDown, uint64(n))
+				if _, werr := clientConn.Write(buf[:n]); werr != nil {
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
+
+	wg.Wait()
+}
+
+func (e *Engine) speedLoop(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			e.mu.Lock()
+			now := time.Now()
+			dt := now.Sub(e.lastCalc).Seconds()
+			if dt > 0 {
+				// Client Outbound Speed
+				curUp := atomic.LoadUint64(&e.bytesUp)
+				curDown := atomic.LoadUint64(&e.bytesDown)
+				e.speedUp = float64(curUp-e.lastUp) / dt
+				e.speedDown = float64(curDown-e.lastDown) / dt
+				e.lastUp = curUp
+				e.lastDown = curDown
+
+				// Server Provider Speed
+				curSrvUp := atomic.LoadUint64(&e.serverBytesUp)
+				curSrvDown := atomic.LoadUint64(&e.serverBytesDown)
+				e.serverSpeedUp = float64(curSrvUp-e.lastServerUp) / dt
+				e.serverSpeedDown = float64(curSrvDown-e.lastServerDown) / dt
+				e.lastServerUp = curSrvUp
+				e.lastServerDown = curSrvDown
+
+				e.lastCalc = now
+			}
+			e.mu.Unlock()
+		}
+	}
 }
 
 func (e *Engine) dialAndHandshakeNode(targetHost string) (*Node, net.Conn, error) {
@@ -1008,11 +1150,6 @@ func (e *Engine) handleSocks5Conn(conn net.Conn, reader *bufio.Reader) {
 		return
 	}
 
-	// Update node stats
-	atomic.AddUint64(&node.SuccessConns, 1)
-	atomic.AddInt64(&node.ActiveConn, 1)
-	defer atomic.AddInt64(&node.ActiveConn, -1)
-
 	_ = conn.SetReadDeadline(time.Time{})
 
 	// Relay traffic and record bytes
@@ -1116,11 +1253,6 @@ func (e *Engine) handleHttpProxyConn(conn net.Conn, reader *bufio.Reader) {
 		}
 	}
 
-	// Update node stats
-	atomic.AddUint64(&node.SuccessConns, 1)
-	atomic.AddInt64(&node.ActiveConn, 1)
-	defer atomic.AddInt64(&node.ActiveConn, -1)
-
 	_ = conn.SetReadDeadline(time.Time{})
 
 	// Relay traffic
@@ -1145,7 +1277,6 @@ func (e *Engine) relayHttpWithStats(clientConn net.Conn, clientReader io.Reader,
 			n, err := clientReader.Read(buf)
 			if n > 0 {
 				atomic.AddUint64(&e.bytesUp, uint64(n))
-				atomic.AddUint64(&node.BytesUp, uint64(n))
 				if _, werr := serverConn.Write(buf[:n]); werr != nil {
 					break
 				}
@@ -1165,7 +1296,6 @@ func (e *Engine) relayHttpWithStats(clientConn net.Conn, clientReader io.Reader,
 			n, err := serverConn.Read(buf)
 			if n > 0 {
 				atomic.AddUint64(&e.bytesDown, uint64(n))
-				atomic.AddUint64(&node.BytesDown, uint64(n))
 				if _, werr := clientConn.Write(buf[:n]); werr != nil {
 					break
 				}
@@ -1179,104 +1309,8 @@ func (e *Engine) relayHttpWithStats(clientConn net.Conn, clientReader io.Reader,
 	wg.Wait()
 }
 
-func (e *Engine) relay(c1, c2 net.Conn) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-	closeBoth := func() {
-		_ = c1.Close()
-		_ = c2.Close()
-	}
-	go func() {
-		defer wg.Done()
-		defer closeBoth()
-		io.Copy(c1, c2)
-	}()
-	go func() {
-		defer wg.Done()
-		defer closeBoth()
-		io.Copy(c2, c1)
-	}()
-	wg.Wait()
-}
 
-func (e *Engine) relayWithStats(clientConn, serverConn net.Conn, node *Node) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-	closeBoth := func() {
-		_ = clientConn.Close()
-		_ = serverConn.Close()
-	}
 
-	// client -> server (upload)
-	go func() {
-		defer wg.Done()
-		defer closeBoth()
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := clientConn.Read(buf)
-			if n > 0 {
-				atomic.AddUint64(&e.bytesUp, uint64(n))
-				atomic.AddUint64(&node.BytesUp, uint64(n))
-				if _, werr := serverConn.Write(buf[:n]); werr != nil {
-					break
-				}
-			}
-			if err != nil {
-				break
-			}
-		}
-	}()
-
-	// server -> client (download)
-	go func() {
-		defer wg.Done()
-		defer closeBoth()
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := serverConn.Read(buf)
-			if n > 0 {
-				atomic.AddUint64(&e.bytesDown, uint64(n))
-				atomic.AddUint64(&node.BytesDown, uint64(n))
-				if _, werr := clientConn.Write(buf[:n]); werr != nil {
-					break
-				}
-			}
-			if err != nil {
-				break
-			}
-		}
-	}()
-
-	wg.Wait()
-}
-
-func (e *Engine) speedLoop(ctx context.Context) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			e.mu.Lock()
-			now := time.Now()
-			dt := now.Sub(e.lastCalc).Seconds()
-			if dt > 0 {
-				curUp := atomic.LoadUint64(&e.bytesUp)
-				curDown := atomic.LoadUint64(&e.bytesDown)
-
-				e.speedUp = float64(curUp-e.lastUp) / dt
-				e.speedDown = float64(curDown-e.lastDown) / dt
-
-				e.lastUp = curUp
-				e.lastDown = curDown
-				e.lastCalc = now
-			}
-			e.mu.Unlock()
-		}
-	}
-}
 
 // GetAdvertise returns the current configured advertise IP.
 func (e *Engine) GetAdvertise() string {
@@ -1316,8 +1350,8 @@ func (e *Engine) SetProbeInterval(d time.Duration) {
 	e.probeInterval = d
 }
 
-// DefaultInternetProbe checks external network connectivity via lightweight DNS port dials.
-// Priority: 223.5.5.5:53 (AliDNS, 2s timeout), fallback: 1.1.1.1:53 (Cloudflare DNS, 2s timeout).
+// DefaultInternetProbe checks external network connectivity via lightweight DNS port dials and HTTP 204.
+// Priority: 223.5.5.5:53 (AliDNS, 2s timeout), fallback: 1.1.1.1:53 (Cloudflare DNS, 2s timeout), HTTP 204.
 func DefaultInternetProbe() bool {
 	conn, err := net.DialTimeout("tcp", "223.5.5.5:53", 2*time.Second)
 	if err == nil {
@@ -1327,6 +1361,12 @@ func DefaultInternetProbe() bool {
 	conn2, err := net.DialTimeout("tcp", "1.1.1.1:53", 2*time.Second)
 	if err == nil {
 		_ = conn2.Close()
+		return true
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://connect.rom.miui.com/generate_204")
+	if err == nil {
+		_ = resp.Body.Close()
 		return true
 	}
 	return false
@@ -1401,4 +1441,121 @@ func (e *Engine) probeLoop(ctx context.Context) {
 		}
 	}
 }
+
+func (e *Engine) nodeHealthLoop(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	client := &http.Client{
+		Timeout: 900 * time.Millisecond,
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			e.checkAndSyncNodes(client)
+		}
+	}
+}
+
+type probeTarget struct {
+	ID      string
+	IP      string
+	Port    int
+	APIPort int
+}
+
+func (e *Engine) checkAndSyncNodes(client *http.Client) {
+	var targets []probeTarget
+
+	e.mu.RLock()
+	for _, n := range e.nodes {
+		if !n.IsMe {
+			targets = append(targets, probeTarget{
+				ID:      n.ID,
+				IP:      n.IP,
+				Port:    n.Port,
+				APIPort: n.APIPort,
+			})
+		}
+	}
+	e.mu.RUnlock()
+
+	if len(targets) == 0 {
+		return
+	}
+
+	var wg sync.WaitGroup
+	for _, target := range targets {
+		wg.Add(1)
+		go func(tgt probeTarget) {
+			defer wg.Done()
+			e.probeAndSyncSingleNode(client, tgt)
+		}(target)
+	}
+	wg.Wait()
+}
+
+func (e *Engine) probeAndSyncSingleNode(client *http.Client, target probeTarget) {
+	// 1. Try REST API nodes sync if APIPort is known (> 0)
+	if target.APIPort > 0 {
+		apiHostPort := net.JoinHostPort(target.IP, strconv.Itoa(target.APIPort))
+		url := fmt.Sprintf("http://%s/api/v1/nodes", apiHostPort)
+		resp, err := client.Get(url)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			var apiResp struct {
+				Code int     `json:"code"`
+				Data []*Node `json:"data"`
+			}
+			if decErr := json.NewDecoder(resp.Body).Decode(&apiResp); decErr == nil && apiResp.Code == 200 {
+				e.mu.Lock()
+				if n, ok := e.nodes[target.ID]; ok {
+					n.Status = NodeStatusOnline
+					for _, remoteNode := range apiResp.Data {
+						if remoteNode.IsMe {
+							n.BytesUp = remoteNode.BytesUp
+							n.BytesDown = remoteNode.BytesDown
+							n.SpeedUp = remoteNode.SpeedUp
+							n.SpeedDown = remoteNode.SpeedDown
+							n.ActiveConn = remoteNode.ActiveConn
+							n.SuccessConns = remoteNode.SuccessConns
+							n.FailConns = remoteNode.FailConns
+							break
+						}
+					}
+					n.LastSeen = time.Now()
+				}
+				e.mu.Unlock()
+				_ = resp.Body.Close()
+				return
+			}
+			_ = resp.Body.Close()
+		} else if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}
+
+	// 2. Fallback: TCP Server Port Dial Probe
+	tcpAddr := net.JoinHostPort(target.IP, strconv.Itoa(target.Port))
+	conn, err := net.DialTimeout("tcp", tcpAddr, 1200*time.Millisecond)
+	if err == nil {
+		_ = conn.Close()
+		e.mu.Lock()
+		if n, ok := e.nodes[target.ID]; ok {
+			n.Status = NodeStatusOnline
+			n.LastSeen = time.Now()
+		}
+		e.mu.Unlock()
+	} else {
+		// Unreachable
+		e.mu.Lock()
+		if n, ok := e.nodes[target.ID]; ok {
+			n.Status = NodeStatusOffline
+		}
+		e.mu.Unlock()
+	}
+}
+
 

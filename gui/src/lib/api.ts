@@ -3,6 +3,7 @@ export interface NodeInfo {
   hostname: string;
   ip: string;
   port: number;
+  api_port: number;
   role: string;
   status: string;
   active_conns: number;
@@ -10,6 +11,8 @@ export interface NodeInfo {
   fail_conns: number;
   bytes_up: number;
   bytes_down: number;
+  speed_up: number;
+  speed_down: number;
   last_seen: string;
   is_me: boolean;
 }
@@ -41,6 +44,10 @@ export interface StatusData {
   speed_down: number;
   bytes_up: number;
   bytes_down: number;
+  server_speed_up: number;
+  server_speed_down: number;
+  server_bytes_up: number;
+  server_bytes_down: number;
   total_nodes: number;
   online_nodes: number;
   advertise?: string;
