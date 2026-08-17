@@ -64,20 +64,6 @@ func (d *Discovery) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to browse zeroconf services: %w", err)
 	}
 
-	// Periodic mDNS re-query every 5s to discover new/late-joining LAN nodes
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				_ = resolver.Browse(ctx, ServiceType, "local.", entries)
-			}
-		}
-	}()
-
 	return nil
 }
 

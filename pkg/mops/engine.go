@@ -544,6 +544,8 @@ func (e *Engine) acceptServer(l net.Listener) {
 func (e *Engine) handleServerConn(conn net.Conn) {
 	defer conn.Close()
 
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+
 	reader := bufio.NewReader(conn)
 	line, err := reader.ReadBytes('\n')
 	if err != nil {
@@ -555,7 +557,8 @@ func (e *Engine) handleServerConn(conn net.Conn) {
 		return
 	}
 
-	selfID := fmt.Sprintf("%s@%s:%d", e.cfg.Hostname, e.cfg.Advertise, e.cfg.ServerPort)
+	selfIP := ResolveAdvertiseIP(e.cfg.Advertise)
+	selfID := fmt.Sprintf("%s@%s:%d", e.cfg.Hostname, selfIP, e.cfg.ServerPort)
 	e.mu.Lock()
 	var meNode *Node
 	if me, ok := e.nodes[selfID]; ok {
@@ -568,6 +571,7 @@ func (e *Engine) handleServerConn(conn net.Conn) {
 	multiReader := io.MultiReader(reader, conn)
 
 	if hdr.Proto == "file" {
+		_ = conn.SetReadDeadline(time.Time{})
 		e.handleIncomingFile(multiReader, hdr, meNode)
 		return
 	}
@@ -577,6 +581,8 @@ func (e *Engine) handleServerConn(conn net.Conn) {
 		if meNode != nil {
 			atomic.AddUint64(&meNode.FailConns, 1)
 		}
+		fmt.Printf("[MOPS ERROR] Server failed to dial outbound target [%s]: %v\n", hdr.Host, err)
+		_, _ = conn.Write([]byte{0x01})
 		return
 	}
 	defer targetConn.Close()
@@ -584,6 +590,12 @@ func (e *Engine) handleServerConn(conn net.Conn) {
 	if meNode != nil {
 		atomic.AddUint64(&meNode.SuccessConns, 1)
 	}
+
+	if _, err := conn.Write([]byte{0x00}); err != nil {
+		return
+	}
+
+	_ = conn.SetReadDeadline(time.Time{})
 
 	e.relayServerWithStats(conn, multiReader, targetConn, meNode)
 }
@@ -654,8 +666,9 @@ func createUniqueFile(dir, fileName string) (*os.File, string, error) {
 		return nil, "", err
 	}
 
+	fileName = strings.ReplaceAll(fileName, "\\", "/")
 	baseName := filepath.Base(fileName)
-	if baseName == "." || baseName == "/" {
+	if baseName == "." || baseName == "/" || baseName == "" {
 		baseName = "file.bin"
 	}
 	ext := filepath.Ext(baseName)
@@ -818,13 +831,13 @@ func (e *Engine) relayServerWithStats(conn net.Conn, connReader io.Reader, targe
 	wg.Wait()
 }
 
-func (e *Engine) dialTargetNode() (*Node, net.Conn, error) {
-	var serverConn net.Conn
-	var node *Node
+func (e *Engine) dialAndHandshakeNode(targetHost string) (*Node, net.Conn, error) {
+	var lastErr error
 
 	for retries := 0; retries < 3; retries++ {
 		selected, err := e.selectNode()
 		if err != nil {
+			lastErr = err
 			break
 		}
 
@@ -840,17 +853,53 @@ func (e *Engine) dialTargetNode() (*Node, net.Conn, error) {
 		if err != nil {
 			atomic.AddUint64(&selected.FailConns, 1)
 			e.RemoveNode(selected.ID)
+			fmt.Printf("[MOPS WARN] Failed to connect node [%s] (%s): %v, marking OFFLINE and retrying next...\n", selected.Hostname, nodeAddr, err)
+			lastErr = err
 			continue
 		}
-		serverConn = dialConn
-		node = selected
-		break
+
+		// Send MOPS tunnel Header
+		hdr := Header{
+			Version:    1,
+			Host:       targetHost,
+			ClientPort: e.cfg.ClientPort,
+			ClientHost: e.cfg.Hostname,
+		}
+		hdrBytes, _ := json.Marshal(hdr)
+		hdrBytes = append(hdrBytes, '\n')
+
+		_ = dialConn.SetDeadline(time.Now().Add(5 * time.Second))
+		if _, err := dialConn.Write(hdrBytes); err != nil {
+			atomic.AddUint64(&selected.FailConns, 1)
+			_ = dialConn.Close()
+			fmt.Printf("[MOPS WARN] Failed to send tunnel header to node [%s]: %v, retrying next...\n", selected.Hostname, err)
+			lastErr = err
+			continue
+		}
+
+		// Read Server Handshake ACK
+		ack := make([]byte, 1)
+		if _, err := io.ReadFull(dialConn, ack); err != nil || ack[0] != 0x00 {
+			atomic.AddUint64(&selected.FailConns, 1)
+			_ = dialConn.Close()
+			if err != nil {
+				fmt.Printf("[MOPS WARN] Node [%s] closed handshake unexpectedly for [%s]: %v, retrying next...\n", selected.Hostname, targetHost, err)
+				lastErr = err
+			} else {
+				fmt.Printf("[MOPS WARN] Node [%s] failed to reach outbound target [%s], retrying next...\n", selected.Hostname, targetHost)
+				lastErr = fmt.Errorf("node %s failed to connect target %s (ack=%d)", selected.Hostname, targetHost, ack[0])
+			}
+			continue
+		}
+
+		_ = dialConn.SetDeadline(time.Time{})
+		return selected, dialConn, nil
 	}
 
-	if serverConn == nil || node == nil {
-		return nil, nil, fmt.Errorf("no available online nodes to connect")
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no available online nodes")
 	}
-	return node, serverConn, nil
+	return nil, nil, lastErr
 }
 
 // Client Side: Accept SOCKS5 & HTTP hybrid proxy connections
@@ -865,6 +914,8 @@ func (e *Engine) acceptClient(l net.Listener) {
 }
 
 func (e *Engine) handleClientConn(conn net.Conn) {
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+
 	reader := bufio.NewReader(conn)
 	peek, err := reader.Peek(1)
 	if err != nil {
@@ -942,30 +993,15 @@ func (e *Engine) handleSocks5Conn(conn net.Conn, reader *bufio.Reader) {
 	port := int(buf[0])<<8 | int(buf[1])
 	targetHost := net.JoinHostPort(host, strconv.Itoa(port))
 
-	node, serverConn, err := e.dialTargetNode()
+	node, serverConn, err := e.dialAndHandshakeNode(targetHost)
 	if err != nil {
+		fmt.Printf("[MOPS ERROR] All available nodes failed for target [%s]: %v\n", targetHost, err)
 		conn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return
 	}
 	defer serverConn.Close()
 
 	fmt.Printf("[MOPS PROXY SOCKS5] Selected Node [%s] (%s:%d) for target [%s]\n", node.Hostname, node.IP, node.Port, targetHost)
-
-	// Send Header
-	hdr := Header{
-		Version:    1,
-		Host:       targetHost,
-		ClientPort: e.cfg.ClientPort,
-		ClientHost: e.cfg.Hostname,
-	}
-	hdrBytes, _ := json.Marshal(hdr)
-	hdrBytes = append(hdrBytes, '\n')
-
-	if _, err := serverConn.Write(hdrBytes); err != nil {
-		atomic.AddUint64(&node.FailConns, 1)
-		conn.Write([]byte{0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
-		return
-	}
 
 	// Send SOCKS5 Success Response
 	if _, err := conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0}); err != nil {
@@ -976,6 +1012,8 @@ func (e *Engine) handleSocks5Conn(conn net.Conn, reader *bufio.Reader) {
 	atomic.AddUint64(&node.SuccessConns, 1)
 	atomic.AddInt64(&node.ActiveConn, 1)
 	defer atomic.AddInt64(&node.ActiveConn, -1)
+
+	_ = conn.SetReadDeadline(time.Time{})
 
 	// Relay traffic and record bytes
 	e.relayWithStats(conn, serverConn, node)
@@ -1054,35 +1092,16 @@ func (e *Engine) handleHttpProxyConn(conn net.Conn, reader *bufio.Reader) {
 		initialPayload = headerBuf.Bytes()
 	}
 
-	node, serverConn, err := e.dialTargetNode()
+	node, serverConn, err := e.dialAndHandshakeNode(targetHost)
 	if err != nil {
+		fmt.Printf("[MOPS ERROR] All available nodes failed for target [%s]: %v\n", targetHost, err)
 		if method == "CONNECT" {
 			_, _ = conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
 		} else {
-			_, _ = conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\n\r\nMOPS: No available nodes\r\n"))
+			_, _ = conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\n\r\nMOPS: Remote nodes failed to reach target host\r\n"))
 		}
 		return
 	}
-	defer serverConn.Close()
-
-	fmt.Printf("[MOPS PROXY HTTP] Selected Node [%s] (%s:%d) for target [%s]\n", node.Hostname, node.IP, node.Port, targetHost)
-
-	// Send MOPS tunnel Header
-	hdr := Header{
-		Version:    1,
-		Host:       targetHost,
-		ClientPort: e.cfg.ClientPort,
-		ClientHost: e.cfg.Hostname,
-	}
-	hdrBytes, _ := json.Marshal(hdr)
-	hdrBytes = append(hdrBytes, '\n')
-
-	if _, err := serverConn.Write(hdrBytes); err != nil {
-		atomic.AddUint64(&node.FailConns, 1)
-		_, _ = conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
-		return
-	}
-
 	if method == "CONNECT" {
 		// Reply 200 Connection Established to client
 		if _, err := conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
@@ -1101,6 +1120,8 @@ func (e *Engine) handleHttpProxyConn(conn net.Conn, reader *bufio.Reader) {
 	atomic.AddUint64(&node.SuccessConns, 1)
 	atomic.AddInt64(&node.ActiveConn, 1)
 	defer atomic.AddInt64(&node.ActiveConn, -1)
+
+	_ = conn.SetReadDeadline(time.Time{})
 
 	// Relay traffic
 	clientMultiReader := io.MultiReader(reader, conn)

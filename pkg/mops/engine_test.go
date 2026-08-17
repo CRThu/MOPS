@@ -1043,4 +1043,182 @@ func TestEngineStrictRoundRobinDistribution(t *testing.T) {
 	}
 }
 
+func TestRemoteTargetConnectFailureFailConnsIncremented(t *testing.T) {
+	// Pick an unused local port as non-existent target
+	unreachablePort := getFreePort()
+
+	sPort := getFreePort()
+	cPort := getFreePort()
+	eng := NewEngine(Config{
+		ServerPort: sPort,
+		ClientPort: cPort,
+		ListenAddr: "127.0.0.1",
+		Hostname:   "FailConnTester",
+		Advertise:  "127.0.0.1",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, eng.Start(ctx))
+	defer eng.Stop()
+
+	// 1. SOCKS5 request to unreachable target
+	proxyAddr := fmt.Sprintf("127.0.0.1:%d", cPort)
+	conn, err := net.Dial("tcp", proxyAddr)
+	require.NoError(t, err)
+
+	_, _ = conn.Write([]byte{0x05, 0x01, 0x00})
+	authResp := make([]byte, 2)
+	_, _ = io.ReadFull(conn, authResp)
+
+	// CONNECT to unreachable port
+	req := []byte{0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, byte(unreachablePort >> 8), byte(unreachablePort & 0xff)}
+	_, _ = conn.Write(req)
+
+	socksResp := make([]byte, 10)
+	_, _ = io.ReadFull(conn, socksResp)
+	assert.NotEqual(t, byte(0x00), socksResp[1], "Expected SOCKS5 error response code")
+	conn.Close()
+
+	// 2. HTTP CONNECT request to unreachable target
+	httpConn, err := net.Dial("tcp", proxyAddr)
+	require.NoError(t, err)
+
+	connectReq := fmt.Sprintf("CONNECT 127.0.0.1:%d HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n\r\n", unreachablePort, unreachablePort)
+	_, _ = httpConn.Write([]byte(connectReq))
+
+	bufReader := bufio.NewReader(httpConn)
+	statusLine, err := bufReader.ReadString('\n')
+	require.NoError(t, err)
+	assert.Contains(t, statusLine, "502 Bad Gateway")
+	httpConn.Close()
+
+	// Verify FailConns is recorded
+	nodes := eng.GetNodes()
+	require.NotEmpty(t, nodes)
+	var totalFail uint64
+	for _, n := range nodes {
+		totalFail += n.FailConns
+	}
+	assert.Greater(t, totalFail, uint64(0), "Expected FailConns > 0 for unreachable target")
+}
+
+func TestMultiNodeFailoverWhenRemoteOutboundFails(t *testing.T) {
+	// 1. Start Echo Destination
+	destListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer destListener.Close()
+	destPort := destListener.Addr().(*net.TCPAddr).Port
+
+	go func() {
+		for {
+			conn, err := destListener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 1024)
+				n, _ := c.Read(buf)
+				if n > 0 {
+					c.Write([]byte("ECHO_DEST: " + string(buf[:n])))
+				}
+			}(conn)
+		}
+	}()
+
+	// 2. Start Faulty Server S1 (Always rejects outbound requests with 0x01)
+	faultyS1Listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer faultyS1Listener.Close()
+	s1Port := faultyS1Listener.Addr().(*net.TCPAddr).Port
+
+	go func() {
+		for {
+			conn, err := faultyS1Listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := bufio.NewReader(c)
+				_, _ = r.ReadBytes('\n') // read header
+				_, _ = c.Write([]byte{0x01}) // reject
+			}(conn)
+		}
+	}()
+
+	// 3. Start Healthy Server S2
+	s2Port := getFreePort()
+	engS2 := NewEngine(Config{
+		ServerPort: s2Port,
+		ClientPort: 0,
+		ListenAddr: "127.0.0.1",
+		Hostname:   "Healthy-S2",
+		Advertise:  "127.0.0.1",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, engS2.Start(ctx))
+	defer engS2.Stop()
+
+	// 4. Start Client Engine with S1 and S2
+	clientPort := getFreePort()
+	engClient := NewEngine(Config{
+		ServerPort: 0,
+		ClientPort: clientPort,
+		ListenAddr: "127.0.0.1",
+		Hostname:   "Client-Failover",
+		Advertise:  "127.0.0.1",
+	})
+	require.NoError(t, engClient.Start(ctx))
+	defer engClient.Stop()
+
+	engClient.UpdateNode(&Node{
+		ID:       "node-faulty-s1",
+		Hostname: "FaultyS1",
+		IP:       "127.0.0.1",
+		Port:     s1Port,
+		Status:   NodeStatusOnline,
+	})
+	engClient.UpdateNode(&Node{
+		ID:       "node-healthy-s2",
+		Hostname: "HealthyS2",
+		IP:       "127.0.0.1",
+		Port:     s2Port,
+		Status:   NodeStatusOnline,
+	})
+
+	// 5. Connect through Client SOCKS5
+	proxyConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", clientPort))
+	require.NoError(t, err)
+	defer proxyConn.Close()
+
+	_, _ = proxyConn.Write([]byte{0x05, 0x01, 0x00})
+	authResp := make([]byte, 2)
+	_, _ = io.ReadFull(proxyConn, authResp)
+
+	req := []byte{0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, byte(destPort >> 8), byte(destPort & 0xff)}
+	_, _ = proxyConn.Write(req)
+
+	socksResp := make([]byte, 10)
+	_, _ = io.ReadFull(proxyConn, socksResp)
+	assert.Equal(t, byte(0x00), socksResp[1], "Client should succeed via failover to healthy S2")
+
+	_, _ = proxyConn.Write([]byte("PingFailover"))
+	readBuf := make([]byte, 1024)
+	n, err := proxyConn.Read(readBuf)
+	require.NoError(t, err)
+	assert.Equal(t, "ECHO_DEST: PingFailover", string(readBuf[:n]))
+
+	// S1 should have recorded FailConns
+	nodes := engClient.GetNodes()
+	for _, n := range nodes {
+		if n.ID == "node-faulty-s1" {
+			assert.GreaterOrEqual(t, n.FailConns, uint64(1))
+		}
+	}
+}
+
+
+
 
