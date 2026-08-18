@@ -294,7 +294,7 @@ func Execute() error {
 	rootCmd.PersistentFlags().StringVar(&listenAddr, "listen", "127.0.0.1", "Client Listen IP")
 	rootCmd.PersistentFlags().StringVar(&advertise, "advertise", "", "mDNS Advertise IP")
 	rootCmd.PersistentFlags().StringVar(&strategy, "strategy", "random", "Load balance strategy")
-	rootCmd.PersistentFlags().StringVar(&downloadDir, "download-dir", "./downloads", "File transfer save directory")
+	rootCmd.PersistentFlags().StringVar(&downloadDir, "download-dir", GetDefaultDownloadDir(), "File transfer save directory")
 	rootCmd.PersistentFlags().StringSliceVar(&nodes, "node", nil, "Explicit remote node IP:Port (e.g. 192.168.132.72:10080)")
 
 	// run command
@@ -302,7 +302,7 @@ func Execute() error {
 		Use:   "run",
 		Short: "Run MOPS proxy daemon in foreground",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDaemon(Config{
+			cfg := Config{
 				ServerPort:  serverPort,
 				ClientPort:  clientPort,
 				APIPort:     apiPort,
@@ -311,7 +311,41 @@ func Execute() error {
 				Advertise:   advertise,
 				Strategy:    strategy,
 				DownloadDir: downloadDir,
-			}, nodes)
+			}
+
+			// 1. Load persistent config from config.json
+			cfg = LoadPersistentConfig(cfg)
+
+			// 2. Override with CLI flags only if explicitly provided by user
+			if cmd.Flags().Changed("server-port") {
+				cfg.ServerPort = serverPort
+			}
+			if cmd.Flags().Changed("client-port") {
+				cfg.ClientPort = clientPort
+			}
+			if cmd.Flags().Changed("api-port") {
+				cfg.APIPort = apiPort
+			}
+			if cmd.Flags().Changed("listen") {
+				cfg.ListenAddr = listenAddr
+			}
+			if cmd.Flags().Changed("hostname") {
+				cfg.Hostname = hostname
+			}
+			if cmd.Flags().Changed("advertise") {
+				cfg.Advertise = advertise
+			}
+			if cmd.Flags().Changed("strategy") {
+				cfg.Strategy = strategy
+			}
+			if cmd.Flags().Changed("download-dir") {
+				cfg.DownloadDir = downloadDir
+			}
+
+			if !service.Interactive() {
+				return ControlService("run", cfg)
+			}
+			return runDaemon(cfg, nodes)
 		},
 	}
 	rootCmd.AddCommand(runCmd)

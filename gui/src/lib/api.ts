@@ -181,6 +181,16 @@ export class ApiClient {
     return res.message;
   }
 
+  async openDownloadDir(): Promise<{ path: string }> {
+    const res = await this.request<{ path: string }>('/api/v1/files/open-dir', {
+      method: 'POST',
+    });
+    if (res.code !== 200) {
+      throw new Error(res.message || '打开下载目录失败');
+    }
+    return res.data;
+  }
+
   async launchChrome(): Promise<{ browser: string; message: string }> {
     const res = await this.request<{ browser: string }>('/api/v1/browser/launch?browser=chrome', {
       method: 'POST',

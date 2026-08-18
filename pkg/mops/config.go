@@ -9,6 +9,20 @@ import (
 
 var configMu sync.RWMutex
 
+// PersistentConfig represents sparse user-defined overrides on disk.
+// Fields that are not explicitly overridden by the user are omitted,
+// preserving the application's ability to dynamically adapt to system defaults.
+type PersistentConfig struct {
+	ServerPort  int    `json:"server_port,omitempty"`
+	ClientPort  int    `json:"client_port,omitempty"`
+	APIPort     int    `json:"api_port,omitempty"`
+	ListenAddr  string `json:"listen_addr,omitempty"`
+	Hostname    string `json:"hostname,omitempty"`
+	Advertise   string `json:"advertise,omitempty"`
+	Strategy    string `json:"strategy,omitempty"`
+	DownloadDir string `json:"download_dir,omitempty"`
+}
+
 // GetConfigFilePath returns the path to config.json located in the same directory as the executable.
 func GetConfigFilePath() string {
 	exePath, err := os.Executable()
@@ -19,8 +33,7 @@ func GetConfigFilePath() string {
 	return "./config.json"
 }
 
-// LoadPersistentConfig loads persistent configuration from the exe directory config.json.
-// Missing or default fields will preserve original default values.
+// LoadPersistentConfig loads sparse overrides from config.json and merges them into defaultCfg.
 func LoadPersistentConfig(defaultCfg Config) Config {
 	configMu.RLock()
 	defer configMu.RUnlock()
@@ -31,52 +44,89 @@ func LoadPersistentConfig(defaultCfg Config) Config {
 		return defaultCfg
 	}
 
-	var fileCfg Config
-	if err := json.Unmarshal(data, &fileCfg); err != nil {
+	var p PersistentConfig
+	if err := json.Unmarshal(data, &p); err != nil {
 		return defaultCfg
 	}
 
-	if fileCfg.ServerPort > 0 {
-		defaultCfg.ServerPort = fileCfg.ServerPort
+	if p.ServerPort > 0 {
+		defaultCfg.ServerPort = p.ServerPort
 	}
-	if fileCfg.ClientPort > 0 {
-		defaultCfg.ClientPort = fileCfg.ClientPort
+	if p.ClientPort > 0 {
+		defaultCfg.ClientPort = p.ClientPort
 	}
-	if fileCfg.APIPort > 0 {
-		defaultCfg.APIPort = fileCfg.APIPort
+	if p.APIPort > 0 {
+		defaultCfg.APIPort = p.APIPort
 	}
-	if fileCfg.ListenAddr != "" {
-		defaultCfg.ListenAddr = fileCfg.ListenAddr
+	if p.ListenAddr != "" {
+		defaultCfg.ListenAddr = p.ListenAddr
 	}
-	if fileCfg.Hostname != "" {
-		defaultCfg.Hostname = fileCfg.Hostname
+	if p.Hostname != "" {
+		defaultCfg.Hostname = p.Hostname
 	}
-	if fileCfg.Advertise != "" {
-		defaultCfg.Advertise = fileCfg.Advertise
+	if p.Advertise != "" {
+		defaultCfg.Advertise = p.Advertise
 	}
-	if fileCfg.Strategy != "" {
-		defaultCfg.Strategy = fileCfg.Strategy
+	if p.Strategy != "" {
+		defaultCfg.Strategy = p.Strategy
 	}
-	if fileCfg.DownloadDir != "" {
-		defaultCfg.DownloadDir = fileCfg.DownloadDir
+	if p.DownloadDir != "" {
+		defaultCfg.DownloadDir = p.DownloadDir
 	}
 	return defaultCfg
 }
 
-// SavePersistentConfig saves configuration JSON into config.json alongside executable.
-func SavePersistentConfig(cfg Config) error {
+// UpdatePersistentConfig performs an atomic incremental modification of config.json.
+func UpdatePersistentConfig(modifier func(p *PersistentConfig)) error {
 	configMu.Lock()
 	defer configMu.Unlock()
 
 	path := GetConfigFilePath()
+	var p PersistentConfig
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &p)
+	}
+
+	modifier(&p)
+
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(path, data, 0644)
+}
+
+// SavePersistentConfig saves configuration JSON into config.json.
+func SavePersistentConfig(cfg Config) error {
+	return UpdatePersistentConfig(func(p *PersistentConfig) {
+		if cfg.ServerPort > 0 {
+			p.ServerPort = cfg.ServerPort
+		}
+		if cfg.ClientPort > 0 {
+			p.ClientPort = cfg.ClientPort
+		}
+		if cfg.APIPort > 0 {
+			p.APIPort = cfg.APIPort
+		}
+		if cfg.ListenAddr != "" {
+			p.ListenAddr = cfg.ListenAddr
+		}
+		if cfg.Hostname != "" {
+			p.Hostname = cfg.Hostname
+		}
+		if cfg.Advertise != "" {
+			p.Advertise = cfg.Advertise
+		}
+		if cfg.Strategy != "" {
+			p.Strategy = cfg.Strategy
+		}
+		if cfg.DownloadDir != "" {
+			p.DownloadDir = cfg.DownloadDir
+		}
+	})
 }

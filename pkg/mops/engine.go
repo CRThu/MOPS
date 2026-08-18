@@ -138,33 +138,42 @@ type Engine struct {
 
 // NewEngine creates a new proxy Engine instance.
 func NewEngine(cfg Config) *Engine {
-	persistent := LoadPersistentConfig(cfg)
-	if cfg.ServerPort > 0 {
-		persistent.ServerPort = cfg.ServerPort
+	explicitDownloadDir := cfg.DownloadDir
+	explicitStrategy := cfg.Strategy
+	explicitListenAddr := cfg.ListenAddr
+	explicitHostname := cfg.Hostname
+	explicitAdvertise := cfg.Advertise
+	explicitServerPort := cfg.ServerPort
+	explicitClientPort := cfg.ClientPort
+	explicitAPIPort := cfg.APIPort
+
+	cfg = LoadPersistentConfig(cfg)
+
+	if explicitDownloadDir != "" {
+		cfg.DownloadDir = explicitDownloadDir
 	}
-	if cfg.ClientPort > 0 {
-		persistent.ClientPort = cfg.ClientPort
+	if explicitStrategy != "" {
+		cfg.Strategy = explicitStrategy
 	}
-	if cfg.APIPort > 0 {
-		persistent.APIPort = cfg.APIPort
+	if explicitListenAddr != "" {
+		cfg.ListenAddr = explicitListenAddr
 	}
-	if cfg.ListenAddr != "" {
-		persistent.ListenAddr = cfg.ListenAddr
+	if explicitHostname != "" {
+		cfg.Hostname = explicitHostname
 	}
-	if cfg.Hostname != "" {
-		persistent.Hostname = cfg.Hostname
+	if explicitAdvertise != "" {
+		cfg.Advertise = explicitAdvertise
 	}
-	if cfg.Advertise != "" {
-		persistent.Advertise = cfg.Advertise
+	if explicitServerPort > 0 {
+		cfg.ServerPort = explicitServerPort
 	}
-	if cfg.Strategy != "" {
-		persistent.Strategy = cfg.Strategy
+	if explicitClientPort > 0 {
+		cfg.ClientPort = explicitClientPort
 	}
-	if cfg.DownloadDir != "" {
-		persistent.DownloadDir = cfg.DownloadDir
+	if explicitAPIPort > 0 {
+		cfg.APIPort = explicitAPIPort
 	}
 
-	cfg = persistent
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = "127.0.0.1"
 	}
@@ -172,8 +181,9 @@ func NewEngine(cfg Config) *Engine {
 		cfg.Strategy = "random"
 	}
 	if cfg.DownloadDir == "" {
-		cfg.DownloadDir = "./downloads"
+		cfg.DownloadDir = GetDefaultDownloadDir()
 	}
+
 	return &Engine{
 		cfg:           cfg,
 		nodes:         make(map[string]*Node),
@@ -183,6 +193,16 @@ func NewEngine(cfg Config) *Engine {
 			Status: "IDLE",
 		},
 	}
+}
+
+// GetDefaultDownloadDir returns the user's system Downloads folder (e.g. C:\Users\<Username>\Downloads),
+// falling back to "./downloads" if user home dir cannot be determined.
+func GetDefaultDownloadDir() string {
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		return filepath.Join(home, "Downloads")
+	}
+	return "./downloads"
 }
 
 // Start launches the Server and Client listeners.
@@ -498,10 +518,11 @@ func (e *Engine) SetDownloadDir(dir string) error {
 	}
 	e.mu.Lock()
 	e.cfg.DownloadDir = dir
-	cfgCopy := e.cfg
 	e.mu.Unlock()
 
-	_ = SavePersistentConfig(cfgCopy)
+	_ = UpdatePersistentConfig(func(p *PersistentConfig) {
+		p.DownloadDir = dir
+	})
 	return nil
 }
 
@@ -510,7 +531,7 @@ func (e *Engine) GetDownloadDir() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if e.cfg.DownloadDir == "" {
-		return "./downloads"
+		return GetDefaultDownloadDir()
 	}
 	return e.cfg.DownloadDir
 }
@@ -642,7 +663,7 @@ func (e *Engine) handleIncomingFile(reader io.Reader, hdr Header, meNode *Node) 
 	saveDir := e.cfg.DownloadDir
 	e.mu.RUnlock()
 	if saveDir == "" {
-		saveDir = "./downloads"
+		saveDir = GetDefaultDownloadDir()
 	}
 
 	outFile, filePath, err := createUniqueFile(saveDir, hdr.FileName)
@@ -697,7 +718,7 @@ func (e *Engine) handleIncomingFile(reader io.Reader, hdr Header, meNode *Node) 
 
 func createUniqueFile(dir, fileName string) (*os.File, string, error) {
 	if dir == "" {
-		dir = "./downloads"
+		dir = GetDefaultDownloadDir()
 	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, "", err
@@ -1323,10 +1344,11 @@ func (e *Engine) GetAdvertise() string {
 func (e *Engine) SetAdvertise(ip string) error {
 	e.mu.Lock()
 	e.cfg.Advertise = ip
-	cfgCopy := e.cfg
 	e.mu.Unlock()
 
-	return SavePersistentConfig(cfgCopy)
+	return UpdatePersistentConfig(func(p *PersistentConfig) {
+		p.Advertise = ip
+	})
 }
 
 // SetDiscovery links discovery service to engine for advertise control.

@@ -147,3 +147,10 @@ func TestCLIServerSubcommand(t *testing.T) {
 	os.Args = []string{"mops", "--api-port", "10082", "server", "on"}
 	assert.NoError(t, Execute())
 }
+
+func TestGetDefaultDownloadDir(t *testing.T) {
+	dir := GetDefaultDownloadDir()
+	assert.NotEmpty(t, dir)
+	assert.Contains(t, dir, "Downloads")
+}
+

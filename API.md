@@ -336,4 +336,26 @@ curl -X POST "http://127.0.0.1:10082/api/v1/files/transfer?target_ip=192.168.132
 }
 ```
 
+---
+
+## 11. 打开文件下载存储目录
+
+调用 Windows 系统资源管理器（Explorer）直接打开当前引擎配置的文件下载存储目录（若目录不存在则会自动创建并定位）。
+
+- **请求路径**: `/api/v1/files/open-dir`
+- **请求方法**: `GET` / `POST`
+
+### 响应示例
+
+```json
+{
+  "code": 200,
+  "message": "已成功打开下载目录",
+  "data": {
+    "path": "D:\\Projects\\MOPS\\downloads"
+  }
+}
+```
+
+
 

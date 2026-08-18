@@ -1,15 +1,19 @@
 
 <script lang="ts">
+  import { createEventDispatcher } from 'svelte';
   import { mopsStore } from '../lib/store';
   import type { StatusData } from '../lib/api';
   import { minimizeWindow, closeWindow, startDragWindow } from '../lib/tauri';
-  import { Shield, ArrowUpRight, ArrowDownLeft, Minus, X, Zap } from 'lucide-svelte';
+  import { Shield, ArrowUpRight, ArrowDownLeft, Minus, X, Zap, FolderDown, Settings, Info, ChevronDown, ChevronUp } from 'lucide-svelte';
 
   export let status: StatusData | null = null;
+
+  const dispatch = createEventDispatcher();
 
   let proxyAddrInput = '';
   let isEditing = false;
   let lastBackendServer = '';
+  let showProxyDetails = false;
 
   $: if (status) {
     const backendServer = status.system_proxy?.proxy_server || '';
@@ -60,6 +64,21 @@
     isLaunchingChrome = false;
   }
 
+  let isOpeningDir = false;
+
+  async function handleOpenDownloadDir() {
+    isOpeningDir = true;
+    try {
+      await mopsStore.openDownloadDir();
+    } finally {
+      isOpeningDir = false;
+    }
+  }
+
+  function handleOpenSettings() {
+    dispatch('openSettings');
+  }
+
   $: totalClusterSpeedUp = ($mopsStore.nodes || []).reduce((acc, cur) => acc + (cur.speed_up || 0), 0);
   $: totalClusterSpeedDown = ($mopsStore.nodes || []).reduce((acc, cur) => acc + (cur.speed_down || 0), 0);
 
@@ -94,10 +113,10 @@
   <div class="absolute -top-10 left-1/2 -translate-x-1/2 w-40 h-10 bg-blue-500/15 blur-2xl rounded-full pointer-events-none"></div>
 
   <!-- Top Bar (Title Only Draggable Region) -->
-  <div class="flex items-center justify-between mb-2.5 relative z-10 cursor-move" data-tauri-drag-region on:mousedown={startDragWindow}>
+  <div class="flex items-center justify-between mb-2.5 relative z-10 cursor-move gap-1.5" data-tauri-drag-region on:mousedown={startDragWindow}>
 
-    <div class="flex items-center space-x-2" data-tauri-drag-region>
-      <div class="relative flex items-center justify-center">
+    <div class="flex items-center space-x-1.5 shrink-0 whitespace-nowrap" data-tauri-drag-region>
+      <div class="relative flex items-center justify-center shrink-0">
         {#if status && $mopsStore.isOnline}
           <div class="w-2 h-2 rounded-full bg-emerald-400"></div>
           <div class="absolute w-3.5 h-3.5 rounded-full bg-emerald-400/40 animate-ping"></div>
@@ -107,29 +126,32 @@
         {/if}
       </div>
 
-      <div class="flex items-center space-x-1.5" data-tauri-drag-region>
-        <h1 class="text-xs font-black tracking-wider bg-gradient-to-r from-blue-400 via-indigo-200 to-emerald-300 bg-clip-text text-transparent uppercase">
+      <div class="flex items-center space-x-1.5 whitespace-nowrap shrink-0" data-tauri-drag-region>
+        <h1 class="text-xs font-black tracking-wider bg-gradient-to-r from-blue-400 via-indigo-200 to-emerald-300 bg-clip-text text-transparent uppercase whitespace-nowrap select-none">
           MOPS Proxy
         </h1>
         {#if status && $mopsStore.isOnline}
-          <span class="text-[9px] font-mono bg-slate-800/90 text-blue-300 border border-blue-500/30 px-1.5 py-0.2 rounded shadow-sm">
-            :{status.client_port} SOCKS5 / HTTP
+          <span
+            title="SOCKS5 / HTTP / HTTPS CONNECT 混合代理端口"
+            class="text-[9px] font-mono bg-slate-800/90 text-blue-300 border border-blue-500/30 px-1.5 py-0.5 rounded shadow-sm whitespace-nowrap shrink-0"
+          >
+            :{status.client_port}
           </span>
         {:else}
-          <span class="text-[9px] font-mono bg-rose-950/80 text-rose-300 border border-rose-500/40 px-1.5 py-0.2 rounded shadow-sm animate-pulse">
-            未连接后台 (重连中...)
+          <span class="text-[9px] font-mono bg-rose-950/80 text-rose-300 border border-rose-500/40 px-1.5 py-0.5 rounded shadow-sm animate-pulse whitespace-nowrap shrink-0">
+            未连接
           </span>
         {/if}
       </div>
     </div>
 
-    <!-- Window Control Buttons (Minimize to Tray & Close) -->
-    <div class="flex items-center space-x-1" on:mousedown|stopPropagation>
+    <!-- Window Control Buttons (Chrome, Open Downloads, Settings, Minimize & Close) -->
+    <div class="flex items-center space-x-1 shrink-0" on:mousedown|stopPropagation>
       <button
         on:click={handleLaunchChrome}
         disabled={isLaunchingChrome}
         aria-label="启动多通道加速版 Chrome"
-        title={status && status.has_chrome !== false ? '一键启动多通道加速版 Chrome (已自动配置双节点分流与多管道加速)' : '未检测到 Chrome 浏览器 (请先安装)'}
+        title={status && status.has_chrome !== false ? '启动多通道加速 Chrome' : '未检测到 Chrome 浏览器'}
         class="p-1 rounded-md transition-all duration-150 active:scale-95 border flex items-center justify-center cursor-pointer {status && status.has_chrome !== false ? 'text-slate-300 hover:text-white bg-slate-800/60 hover:bg-slate-700/80 border-slate-700/70 hover:border-blue-400/50 shadow-sm' : 'text-slate-600 bg-slate-900/30 border-slate-800/30 cursor-not-allowed opacity-50'}"
       >
         <svg class="w-3.5 h-3.5 {isLaunchingChrome ? 'animate-spin' : ''}" viewBox="0 0 24 24" fill="none">
@@ -141,6 +163,25 @@
           <circle cx="12" cy="12" r="4.5" fill="#0f172a"/>
           <circle cx="12" cy="12" r="3.2" fill="#1A73E8"/>
         </svg>
+      </button>
+
+      <button
+        on:click={handleOpenDownloadDir}
+        disabled={isOpeningDir}
+        aria-label="打开下载文件夹"
+        title="打开下载目录"
+        class="p-1 text-slate-300 hover:text-white bg-slate-800/60 hover:bg-slate-700/80 rounded-md transition-all duration-150 active:scale-95 border border-slate-700/70 hover:border-blue-400/50 shadow-sm flex items-center justify-center cursor-pointer disabled:opacity-50"
+      >
+        <FolderDown class="w-3.5 h-3.5 text-blue-400 {isOpeningDir ? 'animate-bounce' : ''}" />
+      </button>
+
+      <button
+        on:click={handleOpenSettings}
+        aria-label="设置"
+        title="偏好设置"
+        class="p-1 text-slate-300 hover:text-white bg-slate-800/60 hover:bg-slate-700/80 rounded-md transition-all duration-150 active:scale-95 border border-slate-700/70 hover:border-blue-400/50 shadow-sm flex items-center justify-center cursor-pointer"
+      >
+        <Settings class="w-3.5 h-3.5 text-slate-300 hover:text-blue-300 transition-colors" />
       </button>
 
       <button
@@ -203,12 +244,24 @@
     <!-- System Proxy Control Panel -->
     <div class="pt-0.5 px-0.5 space-y-1.5">
       <div class="flex items-center justify-between">
-        <div class="flex items-center space-x-2">
+        <button
+          type="button"
+          on:click={() => (showProxyDetails = !showProxyDetails)}
+          class="flex items-center space-x-1.5 cursor-pointer group focus:outline-none select-none text-left"
+          title="点击展开/收起系统代理与环境变量配置详情"
+        >
           <div class="p-0.5 rounded {status?.system_proxy?.enabled ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-500'} transition-colors">
             <Shield class="w-3 h-3" />
           </div>
-          <span class="text-[11px] font-medium text-slate-200">系统代理 System Proxy</span>
-        </div>
+          <span class="text-[11px] font-medium text-slate-200 group-hover:text-blue-300 transition-colors">系统代理 System Proxy</span>
+          <div class="flex items-center text-slate-500 group-hover:text-blue-400 transition-colors">
+            {#if showProxyDetails}
+              <ChevronUp class="w-3 h-3" />
+            {:else}
+              <ChevronDown class="w-3 h-3" />
+            {/if}
+          </div>
+        </button>
 
         <button
           on:click={() => mopsStore.toggleSystemProxy(proxyAddrInput.trim())}
@@ -221,6 +274,55 @@
           ></span>
         </button>
       </div>
+
+      <!-- Collapsible System Proxy & Env Details Panel -->
+      {#if showProxyDetails}
+        <div class="bg-slate-950/90 border border-slate-700/70 rounded-xl p-2.5 space-y-2 shadow-inner animate-fade-in text-[9px] font-mono select-none">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-1.5 font-sans">
+            <span class="text-[10px] font-bold text-slate-200 flex items-center space-x-1">
+              <Shield class="w-3 h-3 text-blue-400" />
+              <span>系统代理与环境变量实时生效状态</span>
+            </span>
+            <span class="text-[8px] font-mono px-1.5 py-0.2 rounded border {status?.system_proxy?.enabled ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40' : 'bg-slate-800 text-slate-400 border-slate-700'}">
+              {status?.system_proxy?.enabled ? '已开启' : '已关闭'}
+            </span>
+          </div>
+
+          <div class="space-y-1.5">
+            <div class="flex flex-col space-y-0.5">
+              <span class="text-slate-400 font-sans font-semibold">注册表 ProxyServer (WinInet):</span>
+              <span class="text-slate-200 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-800 truncate">
+                {status?.system_proxy?.proxy_server || '未配置'}
+              </span>
+            </div>
+
+            <div class="flex flex-col space-y-0.5">
+              <span class="text-slate-400 font-sans font-semibold">HTTP_PROXY:</span>
+              <span class="text-slate-200 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-800 truncate">
+                {status?.system_proxy?.http_proxy || '未设置'}
+              </span>
+            </div>
+
+            <div class="flex flex-col space-y-0.5">
+              <span class="text-slate-400 font-sans font-semibold">HTTPS_PROXY:</span>
+              <span class="text-slate-200 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-800 truncate">
+                {status?.system_proxy?.https_proxy || '未设置'}
+              </span>
+            </div>
+
+            <div class="flex flex-col space-y-0.5">
+              <span class="text-slate-400 font-sans font-semibold">NO_PROXY (绕过内网/本地):</span>
+              <span class="text-slate-400 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-800 truncate" title={status?.system_proxy?.no_proxy}>
+                {status?.system_proxy?.no_proxy || '未设置'}
+              </span>
+            </div>
+          </div>
+
+          <div class="text-[8px] text-slate-400 font-sans pt-1 border-t border-slate-800/80 leading-tight">
+            💡 开关系统代理时，MOPS 会自动同步维护注册表并广播大写环境变量，命令行与各软件免重启直接生效。
+          </div>
+        </div>
+      {/if}
 
       <div class="flex items-center space-x-1.5">
         <input

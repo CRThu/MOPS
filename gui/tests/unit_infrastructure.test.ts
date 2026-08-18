@@ -209,6 +209,24 @@ describe('Infrastructure Layer - ApiClient Unit Tests', () => {
     expect(res.browser).toBe('chrome');
   });
 
+  it('openDownloadDir should send POST request to /api/v1/files/open-dir', async () => {
+    (fetch as any).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        code: 200,
+        message: '已成功打开下载目录',
+        data: { path: 'D:/Downloads' },
+      }),
+    });
+
+    const res = await api.openDownloadDir();
+    expect(fetch).toHaveBeenCalledWith(
+      `${mockBaseUrl}/api/v1/files/open-dir`,
+      expect.objectContaining({ method: 'POST' })
+    );
+    expect(res.path).toBe('D:/Downloads');
+  });
+
   it('should throw error when HTTP response is not ok (e.g. 500)', async () => {
     (fetch as any).mockResolvedValueOnce({
       ok: false,
@@ -221,11 +239,12 @@ describe('Infrastructure Layer - ApiClient Unit Tests', () => {
 });
 
 describe('Tauri Capabilities Adapter Unit Tests', () => {
-  it('minimizeWindow, closeWindow, and startDragWindow should execute gracefully without throwing in fallback environment', async () => {
-    const { minimizeWindow, closeWindow, startDragWindow } = await import('../src/lib/tauri');
+  it('minimizeWindow, closeWindow, selectFolder, and startDragWindow should execute gracefully without throwing in fallback environment', async () => {
+    const { minimizeWindow, closeWindow, startDragWindow, selectFolder } = await import('../src/lib/tauri');
     await expect(minimizeWindow()).resolves.not.toThrow();
     await expect(closeWindow()).resolves.not.toThrow();
     await expect(startDragWindow()).resolves.not.toThrow();
+    await expect(selectFolder()).resolves.toBeNull();
   });
 });
 

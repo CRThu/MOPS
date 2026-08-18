@@ -3,11 +3,13 @@
   import { mopsStore, type AppState } from './lib/store';
   import Header from './components/Header.svelte';
   import NodeList from './components/NodeList.svelte';
+  import SettingsModal from './components/SettingsModal.svelte';
   import Toast from './components/Toast.svelte';
   import { FileText, Network, ChevronDown, Check, X } from 'lucide-svelte';
 
   let state: AppState;
   let showIfaceModal = false;
+  let showSettingsModal = false;
   let customAdvertiseInput = '';
 
   const unsubscribe = mopsStore.subscribe((val) => {
@@ -38,8 +40,18 @@
   <!-- Global Toast Notification -->
   <Toast message={state?.error} />
 
+  <!-- Preferences Settings Modal -->
+  <SettingsModal
+    show={showSettingsModal}
+    currentDownloadDir={state?.status?.download_dir || './downloads'}
+    on:close={() => (showSettingsModal = false)}
+  />
+
   <!-- Header Dashboard -->
-  <Header status={state?.status} />
+  <Header
+    status={state?.status}
+    on:openSettings={() => (showSettingsModal = true)}
+  />
 
   <!-- Main Node List -->
   <NodeList nodes={state?.nodes || []} />

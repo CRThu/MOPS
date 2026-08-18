@@ -94,7 +94,7 @@ describe('State Layer - mopsStore Integration Tests', () => {
   });
 
   it('updateDownloadDir should call API and update download_dir state', async () => {
-    vi.spyOn(api, 'getStatus').mockResolvedValue({ download_dir: './downloads' } as any);
+    vi.spyOn(api, 'getStatus').mockResolvedValue({ download_dir: 'E:/Downloads' } as any);
     vi.spyOn(api, 'setDownloadDir').mockResolvedValue({ download_dir: 'E:/Downloads' });
     vi.spyOn(api, 'getNodes').mockResolvedValue([]);
     vi.spyOn(api, 'getProgress').mockResolvedValue(null);
@@ -105,6 +105,7 @@ describe('State Layer - mopsStore Integration Tests', () => {
     mopsStore.subscribe((s) => (state = s))();
 
     expect(api.setDownloadDir).toHaveBeenCalledWith('E:/Downloads');
+    expect(state.status?.download_dir).toBe('E:/Downloads');
   });
 
   it('startFileTransfer should trigger transferFile API call', async () => {
@@ -156,5 +157,41 @@ describe('State Layer - mopsStore Integration Tests', () => {
     let state!: AppState;
     mopsStore.subscribe((s) => (state = s))();
     expect(state.error).toBe('未检测到 Chrome 浏览器');
+  });
+
+  it('openDownloadDir should call api.openDownloadDir and return success', async () => {
+    vi.spyOn(api, 'openDownloadDir').mockResolvedValue({ path: 'C:/Users/Test/Downloads' });
+
+    const res = await mopsStore.openDownloadDir();
+
+    expect(api.openDownloadDir).toHaveBeenCalled();
+    expect(res.success).toBe(true);
+
+    let state!: AppState;
+    mopsStore.subscribe((s) => (state = s))();
+    expect(state.error).toBeNull();
+  });
+
+  it('openDownloadDir should set error in store on API failure', async () => {
+    vi.spyOn(api, 'openDownloadDir').mockRejectedValue(new Error('打开目录失败'));
+
+    const res = await mopsStore.openDownloadDir();
+
+    expect(api.openDownloadDir).toHaveBeenCalled();
+    expect(res.success).toBe(false);
+
+    let state!: AppState;
+    mopsStore.subscribe((s) => (state = s))();
+    expect(state.error).toBe('打开目录失败');
+  });
+
+  it('updateDownloadDir should set error in store on API failure', async () => {
+    vi.spyOn(api, 'setDownloadDir').mockRejectedValue(new Error('磁盘只读无法写入'));
+
+    await mopsStore.updateDownloadDir('F:/ReadOnlyDir');
+
+    let state!: AppState;
+    mopsStore.subscribe((s) => (state = s))();
+    expect(state.error).toContain('保存路径更新失败: 磁盘只读无法写入');
   });
 });

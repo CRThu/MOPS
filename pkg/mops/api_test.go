@@ -598,3 +598,123 @@ func TestAPILaunchBrowser(t *testing.T) {
 		assert.Equal(t, 404, launchResp.Code)
 	}
 }
+
+func TestAPIOpenDownloadDir(t *testing.T) {
+	tempDir := t.TempDir()
+	apiPort := getFreePort()
+	cfg := Config{
+		ServerPort:  0,
+		ClientPort:  0,
+		APIPort:     apiPort,
+		Hostname:    "OpenDirTestNode",
+		DownloadDir: tempDir,
+	}
+
+	engine := NewEngine(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, engine.Start(ctx))
+	defer engine.Stop()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// 1. POST /api/v1/files/open-dir
+	postResp, err := client.Post(fmt.Sprintf("http://127.0.0.1:%d/api/v1/files/open-dir", apiPort), "application/json", nil)
+	require.NoError(t, err)
+	var openResp struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
+			Path string `json:"path"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(postResp.Body).Decode(&openResp))
+	postResp.Body.Close()
+	assert.Equal(t, 200, openResp.Code)
+	assert.Contains(t, openResp.Data.Path, filepath.Base(tempDir))
+
+	// 2. GET /api/v1/files/open-dir
+	getResp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/files/open-dir", apiPort))
+	require.NoError(t, err)
+	assert.Equal(t, 200, getResp.StatusCode)
+	getResp.Body.Close()
+
+	// 3. DELETE /api/v1/files/open-dir -> 405 Method Not Allowed
+	req, _ := http.NewRequest(http.MethodDelete, fmt.Sprintf("http://127.0.0.1:%d/api/v1/files/open-dir", apiPort), nil)
+	delResp, err := client.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusMethodNotAllowed, delResp.StatusCode)
+	delResp.Body.Close()
+}
+
+func TestAPIConfigPersistenceAndEngineReload(t *testing.T) {
+	configPath := GetConfigFilePath()
+	defer os.Remove(configPath)
+
+	apiPortA := getFreePort()
+	engineA := NewEngine(Config{
+		ServerPort: 0,
+		ClientPort: 0,
+		APIPort:    apiPortA,
+		Hostname:   "PersistNodeA",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, engineA.Start(ctx))
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// 1. Set custom download_dir via POST /api/v1/config
+	customDesktopDir := filepath.Join(os.TempDir(), "mops_user_desktop_dir")
+	defer os.RemoveAll(customDesktopDir)
+
+	postBody, _ := json.Marshal(map[string]string{
+		"download_dir": customDesktopDir,
+	})
+	resp, err := client.Post(fmt.Sprintf("http://127.0.0.1:%d/api/v1/config", apiPortA), "application/json", bytes.NewBuffer(postBody))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+
+	// Verify in-memory of EngineA
+	assert.Equal(t, customDesktopDir, engineA.GetDownloadDir())
+
+	// Verify raw config.json contains ONLY the modified download_dir and no other unmodified defaults
+	rawBytes, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	var rawMap map[string]interface{}
+	require.NoError(t, json.Unmarshal(rawBytes, &rawMap))
+	assert.Equal(t, customDesktopDir, rawMap["download_dir"])
+	assert.Nil(t, rawMap["hostname"], "unmodified hostname must not be written to disk")
+	assert.Nil(t, rawMap["server_port"], "unmodified server_port must not be written to disk")
+
+	// Verify GET /api/v1/status returns updated download_dir
+	statusResp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/status", apiPortA))
+	require.NoError(t, err)
+	var sData struct {
+		Code int        `json:"code"`
+		Data StatusData `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(statusResp.Body).Decode(&sData))
+	statusResp.Body.Close()
+	assert.Equal(t, customDesktopDir, sData.Data.DownloadDir)
+
+	// Stop Engine A
+	engineA.Stop()
+
+	// 2. Simulate restarting MOPS / Desktop (NewEngine with empty config)
+	engineB := NewEngine(Config{
+		ServerPort: 0,
+		ClientPort: 0,
+		APIPort:    getFreePort(),
+		Hostname:   "PersistNodeB",
+	})
+	require.NoError(t, engineB.Start(ctx))
+	defer engineB.Stop()
+
+	// Assert Engine B automatically loads customDesktopDir from config.json!
+	assert.Equal(t, customDesktopDir, engineB.GetDownloadDir())
+}
+

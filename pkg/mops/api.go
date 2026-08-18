@@ -81,6 +81,7 @@ func (a *APIServer) Start(port int, listenAddr string) error {
 	mux.HandleFunc("/api/v1/status", a.handleGetStatus)
 	mux.HandleFunc("/api/v1/files/transfer", a.handleFileTransfer)
 	mux.HandleFunc("/api/v1/files/progress", a.handleFileProgress)
+	mux.HandleFunc("/api/v1/files/open-dir", a.handleOpenFileDir)
 	mux.HandleFunc("/api/v1/system-proxy", a.handleSystemProxy)
 	mux.HandleFunc("/api/v1/client", a.handleClientControl)
 	mux.HandleFunc("/api/v1/server", a.handleServerControl)
@@ -526,6 +527,54 @@ func (a *APIServer) handleFileProgress(w http.ResponseWriter, r *http.Request) {
 		Code:    http.StatusOK,
 		Message: "success",
 		Data:    progress,
+	})
+}
+
+func (a *APIServer) handleOpenFileDir(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{
+			Code:    http.StatusMethodNotAllowed,
+			Message: "Method Not Allowed",
+		})
+		return
+	}
+
+	dir := ""
+	if a.engine != nil {
+		dir = a.engine.GetDownloadDir()
+	}
+	if dir == "" {
+		dir = GetDefaultDownloadDir()
+	}
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, APIResponse{
+			Code:    http.StatusInternalServerError,
+			Message: fmt.Sprintf("无法创建下载目录: %v", err),
+		})
+		return
+	}
+
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		absDir = dir
+	}
+
+	cmd := exec.Command("explorer", absDir)
+	if err := cmd.Start(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, APIResponse{
+			Code:    http.StatusInternalServerError,
+			Message: fmt.Sprintf("打开目录失败: %v", err),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, APIResponse{
+		Code:    http.StatusOK,
+		Message: "已成功打开下载目录",
+		Data: map[string]interface{}{
+			"path": absDir,
+		},
 	})
 }
 

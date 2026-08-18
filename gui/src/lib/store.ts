@@ -127,7 +127,16 @@ function createMopsStore() {
 
   async function updateDownloadDir(newDir: string) {
     try {
-      update((s) => ({ ...s, error: null }));
+      update((s) => {
+        if (s.status) {
+          return {
+            ...s,
+            status: { ...s.status, download_dir: newDir },
+            error: null,
+          };
+        }
+        return { ...s, error: null };
+      });
       await api.setDownloadDir(newDir);
       await fetchState();
     } catch (err: any) {
@@ -157,6 +166,18 @@ function createMopsStore() {
     }
   }
 
+  async function openDownloadDir(): Promise<{ success: boolean; message?: string }> {
+    try {
+      update((s) => ({ ...s, error: null }));
+      await api.openDownloadDir();
+      return { success: true };
+    } catch (err: any) {
+      const errMsg = err.message || '打开下载目录失败';
+      update((s) => ({ ...s, error: errMsg }));
+      return { success: false, message: errMsg };
+    }
+  }
+
   function setError(msg: string | null) {
     update((s) => ({ ...s, error: msg }));
   }
@@ -177,6 +198,7 @@ function createMopsStore() {
     startFileTransfer,
     updateDownloadDir,
     updateAdvertise,
+    openDownloadDir,
     launchChrome,
     setError,
     clearError,
