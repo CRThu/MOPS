@@ -174,7 +174,7 @@
 
       <div class="font-mono text-slate-500 flex items-center space-x-1">
         <span class="text-[9px] bg-slate-900 border border-slate-800 px-1.5 py-0.2 rounded text-slate-400">
-          v1.7.0
+          v1.8.0
         </span>
       </div>
     </div>
