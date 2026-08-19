@@ -491,7 +491,7 @@ func (e *Engine) GetNodes() []*Node {
 func (e *Engine) GetAdvertiseIP() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.cfg.Advertise
+	return ResolveAdvertiseIP(e.cfg.Advertise)
 }
 
 // GetSpeed returns current client outbound proxy speed up/down (bytes/s).

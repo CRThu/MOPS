@@ -84,15 +84,18 @@ fn start_daemon_if_needed(app_handle: &tauri::AppHandle) {
         let mut cmd = Command::new(&exe_path);
         cmd.arg("run");
 
-        if let Some(parent_dir) = exe_path.parent() {
-            cmd.current_dir(parent_dir);
-            let log_dir = parent_dir.join("logs");
-            let _ = std::fs::create_dir_all(&log_dir);
-            if let Ok(f) = std::fs::File::create(log_dir.join("mops-daemon.log")) {
-                if let Ok(f_err) = f.try_clone() {
-                    cmd.stdout(f);
-                    cmd.stderr(f_err);
-                }
+        let app_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .unwrap_or_else(|| exe_path.parent().map(|d| d.to_path_buf()).unwrap_or_else(|| PathBuf::from(".")));
+
+        cmd.current_dir(&app_dir);
+        let log_dir = app_dir.join("logs");
+        let _ = std::fs::create_dir_all(&log_dir);
+        if let Ok(f) = std::fs::File::create(log_dir.join("mops-daemon.log")) {
+            if let Ok(f_err) = f.try_clone() {
+                cmd.stdout(f);
+                cmd.stderr(f_err);
             }
         }
 

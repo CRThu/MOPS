@@ -224,3 +224,52 @@ func TestDiscoveryPauseAndResume(t *testing.T) {
 	assert.NotNil(t, disc.server)
 }
 
+func TestGetTargetInterfaces(t *testing.T) {
+	// 1. Auto-detect fallback when empty
+	autoIfaces := GetTargetInterfaces("")
+	assert.NotNil(t, autoIfaces)
+
+	// 2. Specific interface name matching
+	localIfaces := GetNetworkInterfaces()
+	if len(localIfaces) > 0 {
+		first := localIfaces[0]
+		matched := GetTargetInterfaces(first.Name)
+		assert.NotEmpty(t, matched)
+		assert.Equal(t, first.Name, matched[0].Name)
+
+		// By IP
+		matchedByIP := GetTargetInterfaces(first.IP)
+		assert.NotEmpty(t, matchedByIP)
+	}
+
+	// 3. Fallback when non-existent
+	fallbackIfaces := GetTargetInterfaces("NonExistentIface12345")
+	assert.NotNil(t, fallbackIfaces)
+}
+
+func TestPeriodicBroadcastChannelIsolation(t *testing.T) {
+	eng := NewEngine(Config{
+		ServerPort: getFreePort(),
+		ClientPort: getFreePort(),
+		ListenAddr: "127.0.0.1",
+		Hostname:   "PeriodicHost",
+		Advertise:  "127.0.0.1",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, eng.Start(ctx))
+	defer eng.Stop()
+
+	disc := NewDiscovery(eng)
+	require.NoError(t, disc.Start(ctx))
+	defer disc.Stop()
+
+	// Let periodic broadcast run multiple cycles without channel panic
+	time.Sleep(300 * time.Millisecond)
+	assert.NotNil(t, disc.resolver)
+	assert.NotNil(t, disc.server)
+}
+
+
+

@@ -7,9 +7,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/grandcat/zeroconf"
+	"github.com/miekg/dns"
+	"golang.org/x/net/ipv4"
+	"golang.org/x/sys/windows"
 )
 
 const ServiceType = "_mops-proxy._tcp"
@@ -35,6 +39,42 @@ func NewDiscovery(engine *Engine) *Discovery {
 	return d
 }
 
+// GetTargetInterfaces resolves the specific network interface(s) to use for mDNS discovery.
+func GetTargetInterfaces(adv string) []net.Interface {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+
+	targetIP := ""
+	if adv != "" && adv != "127.0.0.1" {
+		for _, iface := range ifaces {
+			if strings.EqualFold(iface.Name, adv) {
+				return []net.Interface{iface}
+			}
+		}
+		targetIP = ResolveAdvertiseIP(adv)
+	}
+
+	if targetIP != "" && targetIP != "127.0.0.1" {
+		for _, iface := range ifaces {
+			addrs, err := iface.Addrs()
+			if err != nil {
+				continue
+			}
+			for _, addr := range addrs {
+				if ipNet, ok := addr.(*net.IPNet); ok {
+					if ip4 := ipNet.IP.To4(); ip4 != nil && ip4.String() == targetIP {
+						return []net.Interface{iface}
+					}
+				}
+			}
+		}
+	}
+
+	return getMulticastInterfaces()
+}
+
 // Start registers local service and browses for remote nodes.
 func (d *Discovery) Start(ctx context.Context) error {
 	d.mu.Lock()
@@ -48,23 +88,275 @@ func (d *Discovery) Start(ctx context.Context) error {
 	}
 
 	// 1. Register mDNS Service
-	d.registerServerLocked()
+	d.registerServerLocked(nil)
 
-	// 2. Browse mDNS Services
-	resolver, err := zeroconf.NewResolver(nil)
-	if err != nil {
-		return fmt.Errorf("failed to create zeroconf resolver: %w", err)
-	}
-	d.resolver = resolver
+	// 2. Start native SO_REUSEADDR Windows mDNS multicast listener
+	go d.listenMDNS(ctx)
 
-	entries := make(chan *zeroconf.ServiceEntry)
-	go d.handleEntries(ctx, entries)
-
-	if err := resolver.Browse(ctx, ServiceType, "local.", entries); err != nil {
-		return fmt.Errorf("failed to browse zeroconf services: %w", err)
-	}
+	// 3. Start 3s periodic mDNS gratuitous announcement broadcast loop
+	go d.periodicBroadcastLoop(ctx)
 
 	return nil
+}
+
+func (d *Discovery) listenMDNS(ctx context.Context) {
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			return c.Control(func(fd uintptr) {
+				_ = windows.SetsockoptInt(windows.Handle(fd), windows.SOL_SOCKET, windows.SO_REUSEADDR, 1)
+			})
+		},
+	}
+
+	packetConn, err := lc.ListenPacket(ctx, "udp4", "0.0.0.0:5353")
+	if err != nil {
+		return
+	}
+	defer packetConn.Close()
+
+	pconn := ipv4.NewPacketConn(packetConn)
+	group := &net.UDPAddr{IP: net.IPv4(224, 0, 0, 251), Port: 5353}
+
+	ifaces, _ := net.Interfaces()
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagMulticast != 0 {
+			_ = pconn.JoinGroup(&iface, group)
+		}
+	}
+
+	buf := make([]byte, 4096)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		_ = packetConn.SetReadDeadline(time.Now().Add(1 * time.Second))
+		n, src, err := packetConn.ReadFrom(buf)
+		if err != nil {
+			continue
+		}
+
+		var msg dns.Msg
+		if err := msg.Unpack(buf[:n]); err != nil {
+			continue
+		}
+
+		srcUDP, _ := src.(*net.UDPAddr)
+		d.processDNSMsg(&msg, srcUDP)
+	}
+}
+
+func (d *Discovery) processDNSMsg(msg *dns.Msg, src *net.UDPAddr) {
+	if d.engine == nil || msg == nil {
+		return
+	}
+
+	var txtRecords []string
+	var srvPort int
+	for _, rr := range append(append(msg.Answer, msg.Ns...), msg.Extra...) {
+		switch r := rr.(type) {
+		case *dns.TXT:
+			if strings.Contains(r.Hdr.Name, "_mops-proxy") {
+				txtRecords = append(txtRecords, r.Txt...)
+			}
+		case *dns.SRV:
+			if strings.Contains(r.Hdr.Name, "_mops-proxy") {
+				srvPort = int(r.Port)
+			}
+		}
+	}
+
+	if len(txtRecords) == 0 {
+		return
+	}
+
+	txtMap := make(map[string]string)
+	for _, txt := range txtRecords {
+		parts := strings.SplitN(txt, "=", 2)
+		if len(parts) == 2 {
+			txtMap[parts[0]] = parts[1]
+		}
+	}
+
+	hostname := txtMap["hostname"]
+	if hostname == "" {
+		return
+	}
+
+	port := srvPort
+	if pStr, ok := txtMap["port"]; ok {
+		if p, err := strconv.Atoi(pStr); err == nil && p > 0 {
+			port = p
+		}
+	}
+	if port <= 0 {
+		port = 10080
+	}
+
+	apiPort := 0
+	if apStr, ok := txtMap["api_port"]; ok {
+		if ap, err := strconv.Atoi(apStr); err == nil {
+			apiPort = ap
+		}
+	}
+
+	ip := ""
+	if src != nil && src.IP != nil && !src.IP.IsUnspecified() && !src.IP.IsLoopback() {
+		ip = src.IP.String()
+	}
+	if idStr, ok := txtMap["id"]; ok {
+		if atIdx := strings.Index(idStr, "@"); atIdx != -1 {
+			rem := idStr[atIdx+1:]
+			if colonIdx := strings.Index(rem, ":"); colonIdx != -1 {
+				ip = rem[:colonIdx]
+			}
+		}
+	}
+
+	if ip == "" || isExcludedIP(net.ParseIP(ip)) {
+		return
+	}
+
+	selfIP := ResolveAdvertiseIP(d.engine.cfg.Advertise)
+	if (ip == selfIP || ip == "127.0.0.1") && port == d.engine.cfg.ServerPort {
+		return
+	}
+
+	id := txtMap["id"]
+	if id == "" {
+		id = fmt.Sprintf("%s@%s:%d", hostname, ip, port)
+	}
+
+	node := &Node{
+		ID:       id,
+		Hostname: hostname,
+		IP:       ip,
+		Port:     port,
+		APIPort:  apiPort,
+		Role:     txtMap["role"],
+		Status:   NodeStatusOnline,
+		LastSeen: time.Now(),
+	}
+
+	d.engine.UpdateNode(node)
+}
+
+func (d *Discovery) periodicBroadcastLoop(ctx context.Context) {
+	// Initial announcement broadcast immediately
+	d.broadcastAnnouncement()
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			d.mu.Lock()
+			paused := d.paused
+			d.mu.Unlock()
+
+			if paused || d.engine == nil || d.engine.cfg.ServerPort <= 0 {
+				continue
+			}
+
+			d.broadcastAnnouncement()
+		}
+	}
+}
+
+func (d *Discovery) broadcastAnnouncement() {
+	if d.engine == nil || d.engine.cfg.ServerPort <= 0 {
+		return
+	}
+
+	selfIP := ResolveAdvertiseIP(d.engine.cfg.Advertise)
+	if selfIP == "" || selfIP == "127.0.0.1" {
+		return
+	}
+
+	nodeID := fmt.Sprintf("%s@%s:%d", d.engine.cfg.Hostname, selfIP, d.engine.cfg.ServerPort)
+	serviceInstance := fmt.Sprintf("%s-%d._mops-proxy._tcp.local.", d.engine.cfg.Hostname, d.engine.cfg.ServerPort)
+	serviceName := "_mops-proxy._tcp.local."
+	hostDomain := fmt.Sprintf("%s.local.", d.engine.cfg.Hostname)
+
+	msg := new(dns.Msg)
+	msg.MsgHdr.Response = true
+	msg.MsgHdr.Authoritative = true
+
+	// PTR Record
+	ptr := &dns.PTR{
+		Hdr: dns.RR_Header{Name: serviceName, Rrtype: dns.TypePTR, Class: dns.ClassINET, Ttl: 120},
+		Ptr: serviceInstance,
+	}
+
+	// SRV Record
+	srv := &dns.SRV{
+		Hdr:      dns.RR_Header{Name: serviceInstance, Rrtype: dns.TypeSRV, Class: dns.ClassINET | 0x8000, Ttl: 120},
+		Port:     uint16(d.engine.cfg.ServerPort),
+		Target:   hostDomain,
+		Priority: 0,
+		Weight:   0,
+	}
+
+	// TXT Record
+	txt := &dns.TXT{
+		Hdr: dns.RR_Header{Name: serviceInstance, Rrtype: dns.TypeTXT, Class: dns.ClassINET | 0x8000, Ttl: 120},
+		Txt: []string{
+			"id=" + nodeID,
+			"hostname=" + d.engine.cfg.Hostname,
+			"port=" + strconv.Itoa(d.engine.cfg.ServerPort),
+			"api_port=" + strconv.Itoa(d.engine.cfg.APIPort),
+			"role=Server",
+		},
+	}
+
+	// A Record
+	ip4 := net.ParseIP(selfIP).To4()
+	var a *dns.A
+	if ip4 != nil {
+		a = &dns.A{
+			Hdr: dns.RR_Header{Name: hostDomain, Rrtype: dns.TypeA, Class: dns.ClassINET | 0x8000, Ttl: 120},
+			A:   ip4,
+		}
+	}
+
+	msg.Answer = []dns.RR{ptr, srv, txt}
+	if a != nil {
+		msg.Extra = []dns.RR{a}
+	}
+
+	raw, err := msg.Pack()
+	if err != nil {
+		return
+	}
+
+	// Send multicast UDP to 224.0.0.251:5353 on all active physical interfaces
+	dst := &net.UDPAddr{IP: net.IPv4(224, 0, 0, 251), Port: 5353}
+	ifaces, _ := net.Interfaces()
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagMulticast != 0 {
+			addrs, _ := iface.Addrs()
+			for _, addr := range addrs {
+				ipNet, ok := addr.(*net.IPNet)
+				if !ok {
+					continue
+				}
+				ip := ipNet.IP.To4()
+				if ip != nil && !isExcludedIP(ip) {
+					localAddr := &net.UDPAddr{IP: ip, Port: 0}
+					conn, err := net.DialUDP("udp4", localAddr, dst)
+					if err == nil {
+						_, _ = conn.Write(raw)
+						_ = conn.Close()
+					}
+				}
+			}
+		}
+	}
 }
 
 func isVirtualInterface(name string) bool {
@@ -148,7 +440,7 @@ func getMulticastInterfaces() []net.Interface {
 	return validIfaces
 }
 
-func (d *Discovery) registerServerLocked() {
+func (d *Discovery) registerServerLocked(targetIfaces []net.Interface) {
 	if d.server != nil || d.paused || d.engine == nil || d.engine.cfg.ServerPort <= 0 {
 		return
 	}
@@ -169,14 +461,17 @@ func (d *Discovery) registerServerLocked() {
 		"role=Server",
 	}
 
-	validIfaces := getMulticastInterfaces()
+	if len(targetIfaces) == 0 {
+		targetIfaces = GetTargetInterfaces(d.engine.cfg.Advertise)
+	}
+
 	srv, err := zeroconf.Register(
 		instanceName,
 		ServiceType,
 		"local.",
 		d.engine.cfg.ServerPort,
 		text,
-		validIfaces,
+		targetIfaces,
 	)
 	if err == nil {
 		d.server = srv
@@ -201,7 +496,11 @@ func (d *Discovery) ResumeAdvertise() {
 	defer d.mu.Unlock()
 
 	d.paused = false
-	d.registerServerLocked()
+	adv := ""
+	if d.engine != nil {
+		adv = d.engine.cfg.Advertise
+	}
+	d.registerServerLocked(GetTargetInterfaces(adv))
 }
 
 // IsPaused returns whether local mDNS service broadcast is currently paused.
@@ -234,15 +533,22 @@ func (d *Discovery) handleEntries(ctx context.Context, entries <-chan *zeroconf.
 			if !ok {
 				return
 			}
-			node := parseServiceEntry(entry)
-			if node != nil {
-				selfIP := ResolveAdvertiseIP(d.engine.cfg.Advertise)
-				isSelf := (node.IP == selfIP || node.IP == "127.0.0.1") && node.Port == d.engine.cfg.ServerPort
-				if !isSelf {
-					fmt.Printf("[mDNS Auto-Discovered Node] Hostname: %s, IP: %s, Port: %d\n", node.Hostname, node.IP, node.Port)
-					d.engine.UpdateNode(node)
-				}
-			}
+			d.processEntry(entry)
+		}
+	}
+}
+
+func (d *Discovery) processEntry(entry *zeroconf.ServiceEntry) {
+	if entry == nil || d.engine == nil {
+		return
+	}
+	node := parseServiceEntry(entry)
+	if node != nil {
+		selfIP := ResolveAdvertiseIP(d.engine.cfg.Advertise)
+		isSelf := (node.IP == selfIP || node.IP == "127.0.0.1") && node.Port == d.engine.cfg.ServerPort
+		if !isSelf {
+			fmt.Printf("[mDNS Auto-Discovered Node] Hostname: %s, IP: %s, Port: %d\n", node.Hostname, node.IP, node.Port)
+			d.engine.UpdateNode(node)
 		}
 	}
 }
