@@ -2042,7 +2042,7 @@ dependencies = [
 
 [[package]]
 name = "mops-gui"
-version = "1.8.0"
+version = "1.8.2"
 dependencies = [
  "serde",
  "serde_json",
