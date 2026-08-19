@@ -1,6 +1,6 @@
 [package]
 name = "mops-gui"
-version = "1.8.0"
+version = "1.8.2"
 description = "MOPS Multi-node Outbound Proxy System GUI"
 authors = ["MOPS Developer"]
 edition = "2021"
